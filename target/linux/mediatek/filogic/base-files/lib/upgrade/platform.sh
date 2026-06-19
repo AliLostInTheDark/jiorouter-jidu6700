@@ -237,6 +237,7 @@ platform_do_upgrade() {
 	cudy,wr3000p-v1|\
 	huasifei,wh3000-pro-nand|\
 	huasifei,wh3000r-nand|\
+    jiorouter,ax3000-jidu6700|\
 	jiorouter,ax6000-jidu6101)
 		CI_UBIPART="ubi"
 		nand_do_upgrade "$1"
@@ -489,6 +490,7 @@ platform_pre_upgrade() {
 		[ -z "$delay" ] || [ "$delay" -eq "0" ] && \
 			fw_setenv bootmenu_delay 3
 		;;
+	jiorouter,ax3000-jidu6700|\
 	jiorouter,ax6000-jidu6101)
 		jiorouter_initial_setup
 		;;
