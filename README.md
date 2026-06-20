@@ -12,7 +12,7 @@ This guide assumes you have basic familiarity with UART serial connections and T
 
 ---
 
-## 🔌 Hardware Preparation
+## Hardware Preparation
 
 ### Step 1: UART Connection
 Connect your USB to TTL adapter to the UART headers soldered onto your board. 
@@ -36,7 +36,7 @@ Configure your terminal with the following settings:
 
 ---
 
-## 🔓 Unlocking the Bootloader
+## Unlocking the Bootloader
 
 ### Step 4: Access U-Boot Menuloader
 Power on the router while monitoring the serial terminal. When the **MediaTek U-Boot Menuloader** comes online and displays options `0` through `8`, quickly press **`8`** to gain access to the U-Boot shell.
@@ -52,7 +52,7 @@ Enter the default factory credentials:
 
 ---
 
-## 🚀 Flashing OpenWrt
+## Flashing OpenWrt
 
 ### Step 7: Prepare TFTP Server
 Set a static IP on your computer's ethernet interface:
@@ -86,6 +86,6 @@ Alternatively, you can connect your PC back to DHCP, access the LuCI web interfa
 
 ---
 
-## 🐛 Known Issues
+## Known Issues
 
 * **Wireless Chip Temperatures:** Temperature readings for the Wi-Fi chips are currently non-functional. This is because the necessary calibration values and chip-specific tunings are entirely missing from the device's `Factory` partition.
