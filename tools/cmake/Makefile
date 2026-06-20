@@ -37,9 +37,7 @@ HOST_CONFIGURE_ARGS := \
 	--system-liblzma \
 	--system-zlib \
 	--system-zstd \
-	--generator=Ninja \
-	-- \
-	-DCMAKE_USE_OPENSSL=OFF
+	--generator=Ninja
 
 define Host/Compile/Default
 	+$(NINJA) -C $(HOST_BUILD_DIR) $(1)
