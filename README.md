@@ -88,4 +88,4 @@ Alternatively, you can connect your PC back to DHCP, access the LuCI web interfa
 
 ## Known Issues
 
-* **Wireless Chip Temperatures:** Temperature readings for the Wi-Fi chips are currently non-functional. This is because the necessary calibration values and chip-specific tunings are entirely missing from the device's `Factory` partition.
+* ** ⚠️ Wireless Chip Temperatures:** Temperature readings for the Wi-Fi chips are currently non-functional. This is because the necessary calibration values and chip-specific tunings are entirely missing from the device's `Factory` partition.
