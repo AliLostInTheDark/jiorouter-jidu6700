@@ -83,3 +83,9 @@ sysupgrade /tmp/openwrt-mediatek-filogic-jiorouter_ax3000-jidu6700-squashfs-sysu
 ```
 
 Alternatively, you can connect your PC back to DHCP, access the LuCI web interface at `192.168.1.1`, and use the built-in *Backup / Flash Firmware* option to upload and flash the `sysupgrade.bin` file visually.
+
+---
+
+## 🐛 Known Issues
+
+* **Wireless Chip Temperatures:** Temperature readings for the Wi-Fi chips are currently non-functional. This is because the necessary calibration values and chip-specific tunings are entirely missing from the device's `Factory` partition.
