@@ -202,10 +202,10 @@ case "$1" in
 					devname=${fs##*/}
 					if [ "$mountpoint" = "/" ]; then
 						devname="root"
+						ubiblk=$(ls -la /sys/class/block/ 2>/dev/null | awk -F/ '{print $NF}' | grep "^ubiblock" | head -1)
+						[ -n "$ubiblk" ] && realdev="$ubiblk"
 					fi
 
-					realdev=""
-					realdev=""
 					if [ -b "$fs" ] || [ -c "$fs" ]; then
 						maj=$(ls -ln "$fs" 2>/dev/null | awk '{print $5}' | tr -d ',')
 						min=$(ls -ln "$fs" 2>/dev/null | awk '{print $6}')
@@ -213,8 +213,8 @@ case "$1" in
 							realdev=$(awk -v maj="$maj" -v min="$min" '$1==maj && $2==min {print $3}' /proc/diskstats 2>/dev/null)
 						fi
 					elif [ "$mountpoint" = "/" ]; then
-						overlay_fs=$(mount | awk '$3=="/overlay" {print $1}')
-						[ -n "$overlay_fs" ] && realdev="${overlay_fs#/dev/}"
+						ubiblk=$(ls -la /sys/class/block/ 2>/dev/null | awk -F/ '{print $NF}' | grep "^ubiblock" | head -1)
+						[ -n "$ubiblk" ] && realdev="$ubiblk"
 					fi
 					[ -z "$realdev" ] && realdev="${fs#/dev/}"
 					
