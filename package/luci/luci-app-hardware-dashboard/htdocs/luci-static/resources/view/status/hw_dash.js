@@ -198,11 +198,11 @@ return view.extend({
 
 		var getDynColor = function(pct, invert) {
 			if (invert === true) {
-				if (pct >= 40) return '#00e676';
+				if (pct >= 40) return '#00bcd4';
 				if (pct >= 20) return '#ffea00';
 				return '#ff1744';
 			}
-			if (pct < 60) return '#00e676';
+			if (pct < 60) return '#00bcd4';
 			if (pct < 80) return '#ffea00';
 			return '#ff1744';
 		};
@@ -227,7 +227,7 @@ return view.extend({
 			var circumference = 2 * Math.PI * radius;
 			
 			var svgContainer = E('div', { id: 'dial-svg-' + id, style: 'position:absolute; top:0; left:0; width:100%; height:100%;' });
-			svgContainer.innerHTML = '<svg viewBox="0 0 160 160"><circle class="hw-dial-bg" cx="80" cy="80" r="' + radius + '"/><circle id="dial-prog-' + id + '" class="hw-dial-progress" cx="80" cy="80" r="' + radius + '" style="stroke: #00e676; stroke-dasharray: 0 ' + circumference + ';"/></svg>';
+			svgContainer.innerHTML = '<svg viewBox="0 0 160 160"><circle class="hw-dial-bg" cx="80" cy="80" r="' + radius + '"/><circle id="dial-prog-' + id + '" class="hw-dial-progress" cx="80" cy="80" r="' + radius + '" style="stroke: #00bcd4; stroke-dasharray: 0 ' + circumference + ';"/></svg>';
 
 			var card = E('div', { class: 'hw-card' }, [
 				E('h3', { id: 'title-' + id }, title),
@@ -485,11 +485,11 @@ return view.extend({
 							]));
 						};
 
-						if (devState.cpu_meta && devState.cpu_meta.tasks) {
-							addAdvRowText('System Tasks', devState.cpu_meta.tasks, null);
+						if (res.cpu_meta && res.cpu_meta.tasks) {
+							addAdvRowText('System Tasks', res.cpu_meta.tasks, null);
 
-							var ctxt = devState.cpu_meta.ctxt || 0;
-							var intr = devState.cpu_meta.intr || 0;
+							var ctxt = res.cpu_meta.ctxt || 0;
+							var intr = res.cpu_meta.intr || 0;
 							if (self.prevCtxt !== undefined) {
 								var ctxtRate = ctxt - self.prevCtxt;
 								var intrRate = intr - self.prevIntr;
@@ -499,8 +499,8 @@ return view.extend({
 							self.prevCtxt = ctxt;
 							self.prevIntr = intr;
 
-							var connCount = devState.cpu_meta.conntrack || 0;
-							var connMax = devState.cpu_meta.conntrack_max || 1;
+							var connCount = res.cpu_meta.conntrack || 0;
+							var connMax = res.cpu_meta.conntrack_max || 1;
 							var connPct = Math.min((connCount / connMax) * 100, 100);
 							var colorConn = getDynColor(connPct, false);
 							advNode.appendChild(E('div', { class: 'hw-progress-item', style: 'margin-top: 10px;' }, [
@@ -759,7 +759,7 @@ return view.extend({
 						var color = '#ffea00';
 						var bgCol = 'rgba(255,234,0,0.1)';
 						if (tempC >= 80) { color = '#ff1744'; bgCol = 'rgba(255,23,68,0.1)'; }
-						else if (tempC <= 60) { color = '#00e676'; bgCol = 'rgba(0,230,118,0.1)'; }
+						else if (tempC <= 60) { color = '#00bcd4'; bgCol = 'rgba(0,188,212,0.1)'; }
 
 						var lowerName = name.toLowerCase();
 						var targetCol = null;
@@ -812,7 +812,7 @@ return view.extend({
 							res.eth_links.forEach(function(link) {
 								var speedText = link.speed === 'Down' ? 'Down' : link.speed + ' Mbps';
 								var duplexText = link.duplex && link.duplex !== 'unknown' ? ' (' + link.duplex.charAt(0).toUpperCase() + link.duplex.slice(1) + ')' : '';
-								var colorStat = link.speed === 'Down' ? '#ff1744' : '#00e676';
+								var colorStat = link.speed === 'Down' ? '#ff1744' : '#00bcd4';
 								ethNode.appendChild(E('div', { class: 'hw-stat-row', style: 'background: rgba(128,128,128,0.05); padding: 10px 15px; border-radius: 6px; margin-bottom: 5px;' }, [
 									E('span', { class: 'hw-stat-label', style: 'font-weight: bold; font-size: 1.1em;' }, link.iface.toUpperCase()),
 									E('span', { class: 'hw-stat-value', style: 'color: ' + colorStat + ';' }, speedText + duplexText)
@@ -858,7 +858,7 @@ return view.extend({
 								wifiNode.appendChild(E('div', { class: 'hw-stat-row', style: 'background: rgba(128,128,128,0.05); padding: 12px 15px; border-radius: 6px; margin-bottom: 5px; display: flex; flex-direction: column; align-items: flex-start;' }, [
 									E('div', { style: 'font-weight: bold; margin-bottom: 8px; display: flex; justify-content: space-between; width: 100%; font-size: 1.1em;' }, [
 										E('span', { style: 'color: #b388ff;' }, wifi.iface.toUpperCase() + ' (' + wifi.band + ')'),
-										E('span', { style: 'color: #00e676; font-size: 0.85em;' }, wifi.bitrate)
+										E('span', { style: 'color: #00bcd4; font-size: 0.85em;' }, wifi.bitrate)
 									]),
 									E('div', { style: 'display: flex; justify-content: space-between; width: 100%; opacity: 0.8; font-size: 0.9em;' }, [
 										E('span', {}, 'Tx: ' + wifi.txpower),
