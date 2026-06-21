@@ -664,7 +664,7 @@ return view.extend({
 							])
 						];
 
-						if (inodesInfo) {
+						if (inodesInfo && inodesInfo.ipct !== '-') {
 							var ipctNum = parseInt(inodesInfo.ipct) || 0;
 							var icolor = getDynColor(ipctNum);
 							bars.push(
