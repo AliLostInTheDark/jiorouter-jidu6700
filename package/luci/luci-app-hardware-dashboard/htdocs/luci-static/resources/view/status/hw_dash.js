@@ -678,6 +678,23 @@ return view.extend({
 							);
 						}
 
+						if (fs.hw_type === 'NAND' && res.ubi_max_ec !== undefined && res.ubi_max_ec > 0) {
+							var wearPctNum = Math.min((res.ubi_max_ec / 3000) * 100, 100);
+							var wcolor = getDynColor(wearPctNum);
+							bars.push(
+								E('div', { class: 'hw-progress-header', style: 'margin-top: 6px;' }, [
+									E('span', { class: 'hw-stat-label', style: 'font-size: 0.8em; opacity: 0.7;' }, 'UBI Wear (' + res.ubi_max_ec + ' Cycles)'),
+									E('span', { class: 'hw-stat-value', style: `font-size: 0.8em; color: ${wcolor};` }, wearPctNum.toFixed(1) + '%')
+								]),
+								E('div', { class: 'hw-bar-bg', style: 'height: 4px;' }, [
+									E('div', { class: 'hw-bar-fill', style: `width: ${wearPctNum}%; background: ${wcolor};` })
+								])
+							);
+							if (res.ubi_bad_peb > 0) {
+								bars.push(E('div', { style: 'margin-top: 4px; font-size: 0.8em; color: #ff1744;' }, 'Warning: ' + res.ubi_bad_peb + ' Bad Erase Blocks (PEB)'));
+							}
+						}
+
 						dskStats.appendChild(E('div', { class: 'hw-progress-item', style: 'margin-bottom: 15px;' }, bars));
 					});
 
