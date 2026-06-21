@@ -316,9 +316,21 @@ EOF
 					if [ -f "$t/type" ] && [ -f "$t/temp" ]; then
 						TYPE=$(cat "$t/type")
 						TEMP=$(cat "$t/temp")
+						CRIT_TEMP="null"
+						PASS_TEMP="null"
+						for trip in "$t"/trip_point_*_type; do
+							[ -f "$trip" ] || continue
+							trip_type=$(cat "$trip")
+							trip_temp_file="${trip%_type}_temp"
+							if [ "$trip_type" = "critical" ] && [ -f "$trip_temp_file" ]; then
+								CRIT_TEMP=$(cat "$trip_temp_file")
+							elif [ "$trip_type" = "passive" ] && [ -f "$trip_temp_file" ]; then
+								PASS_TEMP=$(cat "$trip_temp_file")
+							fi
+						done
 						SEEN_TYPES="${SEEN_TYPES}${TYPE} "
 						if [ $FIRST -eq 0 ]; then THERMALS="$THERMALS,"; fi
-						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP}"
+						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
 						FIRST=0
 					fi
 				done
@@ -329,9 +341,17 @@ EOF
 							*" $TYPE "*) continue ;;
 						esac
 						TEMP=$(cat "$h/temp1_input")
+						CRIT_TEMP="null"
+						PASS_TEMP="null"
+						if [ -f "$h/temp1_crit" ]; then
+							CRIT_TEMP=$(cat "$h/temp1_crit")
+						fi
+						if [ -f "$h/temp1_max" ]; then
+							PASS_TEMP=$(cat "$h/temp1_max")
+						fi
 						SEEN_TYPES="${SEEN_TYPES}${TYPE} "
 						if [ $FIRST -eq 0 ]; then THERMALS="$THERMALS,"; fi
-						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP}"
+						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
 						FIRST=0
 					fi
 				done

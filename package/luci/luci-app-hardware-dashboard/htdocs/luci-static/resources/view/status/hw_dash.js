@@ -761,6 +761,15 @@ return view.extend({
 						if (tempC >= 80) { color = '#ff1744'; bgCol = 'rgba(255,23,68,0.1)'; }
 						else if (tempC <= 60) { color = '#00bcd4'; bgCol = 'rgba(0,188,212,0.1)'; }
 
+						var crit = t.crit && t.crit !== 'null' ? parseInt(t.crit) : null;
+						var pass = t.pass && t.pass !== 'null' ? parseInt(t.pass) : null;
+						if (crit && crit > 1000) crit = crit / 1000;
+						if (pass && pass > 1000) pass = pass / 1000;
+						
+						var hoverText = '';
+						if (pass) hoverText += 'Passive: ' + pass.toFixed(1) + ' °C';
+						if (crit) hoverText += (hoverText ? ' | ' : '') + 'Critical: ' + crit.toFixed(1) + ' °C';
+
 						var lowerName = name.toLowerCase();
 						var targetCol = null;
 						if (lowerName.indexOf('cpu') !== -1 || lowerName.indexOf('soc') !== -1 || lowerName.indexOf('cpu_ss') !== -1 || lowerName.indexOf('top-glue') !== -1) {
@@ -771,9 +780,15 @@ return view.extend({
 							targetCol = miscNode;
 						}
 
+						var tempDisplay = tempC.toFixed(1) + ' °C';
+						if (tempC >= 90) tempDisplay += ' ⚠️';
+
+						var badgeAttrs = { class: 'hw-temp-badge', style: `color: ${color}; background: ${bgCol}; cursor: ${hoverText ? 'help' : 'default'};` };
+						if (hoverText) badgeAttrs.title = hoverText;
+
 						var row = E('div', { class: 'hw-stat-row' }, [
 							E('span', { class: 'hw-stat-label' }, name),
-							E('span', { class: 'hw-temp-badge', style: `color: ${color}; background: ${bgCol};` }, tempC.toFixed(1) + ' °C')
+							E('span', badgeAttrs, tempDisplay)
 						]);
 
 						if (targetCol) targetCol.appendChild(row);
