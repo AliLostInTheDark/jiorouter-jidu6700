@@ -768,7 +768,7 @@ return view.extend({
 						
 						var hoverText = '';
 						if (pass) hoverText += 'Passive: ' + pass.toFixed(1) + ' °C';
-						if (crit) hoverText += (hoverText ? ' | ' : '') + 'Critical: ' + crit.toFixed(1) + ' °C';
+						if (crit) hoverText += (hoverText ? '\n' : '') + 'Critical: ' + crit.toFixed(1) + ' °C';
 
 						var lowerName = name.toLowerCase();
 						var targetCol = null;
@@ -784,7 +784,7 @@ return view.extend({
 						if (tempC >= 90) tempDisplay += ' ⚠️';
 
 						var badgeAttrs = { class: 'hw-temp-badge', style: `color: ${color}; background: ${bgCol}; cursor: ${hoverText ? 'help' : 'default'};` };
-						if (hoverText) badgeAttrs.title = hoverText;
+						if (hoverText) badgeAttrs['data-tooltip'] = hoverText;
 
 						var row = E('div', { class: 'hw-stat-row' }, [
 							E('span', { class: 'hw-stat-label' }, name),
