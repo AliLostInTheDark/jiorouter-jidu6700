@@ -1,0 +1,11 @@
+{
+	"luci-app-hardware-dashboard": {
+		"description": "Grant access to Hardware Dashboard",
+		"read": {
+			"ubus": {
+				"luci.hwdash": [ "info" ]
+			},
+			"cgi-io": [ "exec" ]
+		}
+	}
+}

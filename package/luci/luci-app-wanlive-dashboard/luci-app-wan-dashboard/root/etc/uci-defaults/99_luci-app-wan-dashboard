@@ -1,0 +1,9 @@
+#!/bin/sh
+
+# Clean up cached state to prevent frontend desync during package upgrades
+rm -f /tmp/wandash_state.json
+
+# Restart RPCD to ensure the latest luci.wandash backend script is loaded into memory
+/etc/init.d/rpcd restart
+
+exit 0

@@ -1,0 +1,13 @@
+{
+	"admin/status/wan_dash": {
+		"title": "WAN Dashboard",
+		"weight": 25,
+		"action": {
+			"type": "view",
+			"path": "status/wan_dash"
+		},
+		"depends": {
+			"acl": [ "luci-app-wanlive-dashboard" ]
+		}
+	}
+}

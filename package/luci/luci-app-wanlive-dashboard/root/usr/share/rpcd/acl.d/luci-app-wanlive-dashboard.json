@@ -1,0 +1,13 @@
+{
+	"luci-app-wanlive-dashboard": {
+		"description": "Grant access to WAN Dashboard",
+		"read": {
+			"ubus": {
+				"network.interface": [ "dump" ],
+				"network.device": [ "status" ],
+				"luci.wandash": [ "ping", "ping_all" ]
+			},
+			"uci": [ "network", "firewall", "wandash" ]
+		}
+	}
+}
