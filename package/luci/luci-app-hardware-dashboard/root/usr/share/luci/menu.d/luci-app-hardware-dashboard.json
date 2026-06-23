@@ -1,5 +1,5 @@
 {
-	"admin/status/hw_dash": {
+	"admin/hwdash": {
 		"title": "Hardware Dashboard",
 		"action": {
 			"type": "view",
@@ -8,6 +8,6 @@
 		"depends": {
 			"acl": [ "luci-app-hardware-dashboard" ]
 		},
-		"order": 10
+		"order": 5
 	}
 }
