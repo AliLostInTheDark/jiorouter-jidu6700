@@ -101,21 +101,33 @@ return view.extend({
                 circ: circumference
             };
         };
-        // IEEE 802.11 U-NII sub-band tables, per Wikipedia "List of WLAN channels".
-        // Each row: [name, firstChannel, lastChannel, frequencyRange, requiresDFS]
+        // IEEE 802.11 U-NII sub-band classification, per Wikipedia "List of WLAN
+        // channels". Ranges span every standardised 20 MHz channel (incl. the rare
+        // edge channels: 68 in U-NII-2A, 96 in U-NII-2C, 181 in U-NII-4) purely to
+        // group channels into the right band. The channel numbers AND the frequency
+        // span shown come from the radio's actually-enabled channels (regulatory-
+        // domain filtered in the backend), never the theoretical band edges — so the
+        // display reflects this specific router's capability, not the standard.
+        // Each row: [name, firstChannel, lastChannel, requiresDFS]
         var UNII_5GHZ = [
-            ['U-NII-1',  36,  48,  '5150-5250 MHz', false],
-            ['U-NII-2A', 52,  64,  '5250-5350 MHz', true ],
-            ['U-NII-2C', 100, 144, '5470-5725 MHz', true ],
-            ['U-NII-3',  149, 165, '5725-5850 MHz', false],
-            ['U-NII-4',  169, 177, '5850-5925 MHz', false]
+            ['U-NII-1',  36,  48,  false],
+            ['U-NII-2A', 52,  68,  true ],
+            ['U-NII-2C', 96,  144, true ],
+            ['U-NII-3',  149, 165, false],
+            ['U-NII-4',  169, 181, false]
         ];
         var UNII_6GHZ = [
-            ['U-NII-5',  1,   93,  '5925-6425 MHz', false],
-            ['U-NII-6',  97,  113, '6425-6525 MHz', false],
-            ['U-NII-7',  117, 185, '6525-6875 MHz', false],
-            ['U-NII-8',  189, 233, '6875-7125 MHz', false]
+            ['U-NII-5',  1,   93,  false],
+            ['U-NII-6',  97,  113, false],
+            ['U-NII-7',  117, 185, false],
+            ['U-NII-8',  189, 233, false]
         ];
+        // Center frequency (MHz) of a 20 MHz channel within its band.
+        var chanFreq = function(band, ch) {
+            if (band.indexOf('2.4') !== -1) return ch === 14 ? 2484 : 2412 + (ch - 1) * 5;
+            if (band.indexOf('6') !== -1) return 5950 + ch * 5;
+            return 5000 + ch * 5; // 5 GHz
+        };
         var groupChannels = function(band, channels) {
             if (!channels || channels.length === 0) return '';
             var chs = [];
@@ -126,20 +138,24 @@ return view.extend({
             if (chs.length === 0) return '';
             chs.sort(function(a, b) { return a - b; });
             chs = chs.filter(function(c, i) { return i === 0 || c !== chs[i - 1]; });
-            var rng = function(lo, hi) { return lo === hi ? '' + lo : lo + '-' + hi; };
-            // 2.4 GHz is a single contiguous band; show the span and its frequencies.
+            // Format an enabled span as "lo-hi (freqLo-freqHi MHz)" from the real
+            // frequencies of the lowest and highest channel that is actually on.
+            var fmt = function(lo, hi, dfs) {
+                var fl = chanFreq(band, lo), fh = chanFreq(band, hi);
+                var chTxt = lo === hi ? '' + lo : lo + '-' + hi;
+                var frTxt = fl === fh ? fl + ' MHz' : fl + '-' + fh + ' MHz';
+                return chTxt + ' (' + frTxt + (dfs ? ', DFS' : '') + ')';
+            };
+            // 2.4 GHz is a single contiguous band.
             if (band.indexOf('2.4') !== -1) {
-                var f24 = function(c) { return c === 14 ? 2484 : 2412 + (c - 1) * 5; };
-                var lo = chs[0], hi = chs[chs.length - 1];
-                return rng(lo, hi) + ' (' + f24(lo) + '-' + f24(hi) + ' MHz)';
+                return fmt(chs[0], chs[chs.length - 1], false);
             }
             var table = band.indexOf('6') !== -1 ? UNII_6GHZ : UNII_5GHZ;
             var out = [];
             table.forEach(function(b) {
                 var inBand = chs.filter(function(c) { return c >= b[1] && c <= b[2]; });
                 if (inBand.length === 0) return;
-                out.push(b[0] + ' ' + rng(inBand[0], inBand[inBand.length - 1]) +
-                    ' (' + b[3] + (b[4] ? ', DFS' : '') + ')');
+                out.push(b[0] + ' ' + fmt(inBand[0], inBand[inBand.length - 1], b[3]));
             });
             // Any channel outside the known sub-bands is listed verbatim.
             var unknown = chs.filter(function(c) {
@@ -211,7 +227,8 @@ return view.extend({
         });
         cpuCard.node.appendChild(cpuMetaNode);
         var advCard = E('div', {
-            class: 'hw-card'
+            class: 'hw-card',
+            style: 'justify-content: flex-start;'
         }, [E('h3', {}, 'CPU Detailed Load'), E('div', {
             id: 'hw-adv',
             class: 'hw-stats-list',
@@ -400,7 +417,7 @@ return view.extend({
                                 }, 'Load Average'), E('span', {
                                     class: 'hw-stat-value'
                                 }, (res.cpu_meta.load_1 || '0') + ', ' + (res.cpu_meta.load_5 || '0') + ', ' + (res.cpu_meta.load_15 || '0'))]));
-                                if (res.cpu_meta.governor && res.cpu_meta.governor.trim() !== '' && res.cpu_meta.governor !== 'null') {
+                                if (res.cpu_meta.governor && res.cpu_meta.governor.trim() !== '' && res.cpu_meta.governor !== 'null' && res.cpu_meta.governor.toLowerCase() !== 'unknown') {
                                     metaNode.appendChild(E('div', {
                                         class: 'hw-stat-row'
                                     }, [E('span', {
@@ -744,7 +761,7 @@ return view.extend({
                         dskMeta.innerHTML = '';
                         if (nandChipTotal > 0) {
                             addMR('Physical NAND Total', fmtSize(nandChipTotal));
-                            if (nandRootfsVol > 0 && nandRootfsVol !== nandChipTotal) addMR('rootfs Physical Total', fmtSize(nandRootfsVol));
+                            if (nandRootfsVol > 0 && nandRootfsVol !== nandChipTotal) addMR('Rootfs Total', fmtSize(nandRootfsVol));
                             if (_ovSi.overlay_total > 0) {
                                 var _ovPctN = Math.round(_ovSi.overlay_used / _ovSi.overlay_total * 100);
                                 addMR('Overlay Total', _fmtB(_ovSi.overlay_total));
@@ -756,7 +773,7 @@ return view.extend({
                             if (totalSpace > 0) { addMR('Usable Total', fmtSize(totalSpace)); addMR('Usable Free', fmtSize(totalSpace - totalUsed)); }
                         } else if (diskTotal > 0) {
                             addMR('Physical Disk Total', fmtSize(diskTotal));
-                            if (diskRootfsVol > 0 && diskRootfsVol !== diskTotal) addMR('rootfs Physical Total', fmtSize(diskRootfsVol));
+                            if (diskRootfsVol > 0 && diskRootfsVol !== diskTotal) addMR('Rootfs Total', fmtSize(diskRootfsVol));
                             if (totalSpace > 0) { addMR('Usable Total', fmtSize(totalSpace)); addMR('Usable Free', fmtSize(totalSpace - totalUsed)); }
                         } else if (totalSpace > 0) {
                             addMR('Usable Total', fmtSize(totalSpace));
@@ -840,9 +857,9 @@ return view.extend({
                                     var allocBytes = allocEbs * u.eb_size;
                                     var totalUbiBytes = u.total_ebs * u.eb_size;
                                     var capPct = totalUbiBytes > 0 ? (allocBytes / totalUbiBytes) * 100 : 0;
-                                    // UBI normally reserves all PEBs upfront; only warn on extreme over-allocation
-                                    var capColor = capPct >= 98 ? '#ff5252' : capPct >= 88 ? '#ffb300' : '#00bcd4';
-                                    box.appendChild(makeBar2('PEB Utilization', capPct, fmtBytesS(allocBytes) + ' / ' + fmtBytesS(totalUbiBytes), capColor));
+                                    // UBI reserves essentially all PEBs upfront, so a "full" bar is the
+                                    // normal, healthy state — keep it cyan rather than alarming red.
+                                    box.appendChild(makeBar2('PEB Utilization', capPct, fmtBytesS(allocBytes) + ' / ' + fmtBytesS(totalUbiBytes), '#00bcd4'));
                                 }
                                 box.appendChild(makeRow('PEB Status', 'Total: ' + u.total_ebs + '  Avail: ' + u.avail_ebs + '  Bad: ' + u.bad_pebs, u.bad_pebs > 0 ? '#ffb300' : null));
                                 if (u.min_ec > 0) box.appendChild(makeRow('Min / Max Erase Count', u.min_ec + ' / ' + u.max_ec, null));
@@ -866,7 +883,7 @@ return view.extend({
                                         if (reservedBytes > 0 && reservedBytes !== vol.data_bytes) vsz += ' / ' + fmtBytesS(reservedBytes);
                                         vd.appendChild(E('div', {style: 'display:flex; justify-content:space-between; font-size: 0.85em; padding: 3px 0; border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.07));'}, [
                                             E('span', {style: 'color:#00bcd4;'}, vol.name),
-                                            E('span', {style: 'opacity: 0.7;'}, vol.type + ' | ' + vsz)
+                                            E('span', {style: 'opacity: 0.7;'}, vsz + ' | ' + vol.type)
                                         ]));
                                     });
                                     box.appendChild(vd);
@@ -1368,7 +1385,20 @@ return view.extend({
                             
                             var rxErr = parseInt(l.rx_err) || 0, txErr = parseInt(l.tx_err) || 0;
                             var rxDrop = parseInt(l.rx_drop) || 0, txDrop = parseInt(l.tx_drop) || 0;
-                            
+
+                            // Live throughput from rx/tx byte deltas between polls.
+                            if (!self.prevEth) self.prevEth = {};
+                            var dlMbps = null, ulMbps = null;
+                            var curRx = parseInt(l.rx_bytes) || 0, curTx = parseInt(l.tx_bytes) || 0, nowT = Date.now();
+                            var pe = self.prevEth[l.iface];
+                            if (pe && nowT > pe.t && curRx >= pe.rx && curTx >= pe.tx) {
+                                var dt = (nowT - pe.t) / 1000;
+                                dlMbps = (curRx - pe.rx) * 8 / 1e6 / dt;
+                                ulMbps = (curTx - pe.tx) * 8 / 1e6 / dt;
+                            }
+                            self.prevEth[l.iface] = { rx: curRx, tx: curTx, t: nowT };
+                            var fmtMbps = function(m) { return m >= 1000 ? (m / 1000).toFixed(2) + ' Gbps' : m >= 1 ? m.toFixed(1) + ' Mbps' : (m * 1000).toFixed(0) + ' Kbps'; };
+
                             var box = E('div', { style: 'padding: 10px; background: rgba(128,128,128,0.05); border-radius: 6px; border-left: 4px solid ' + col + '; margin-bottom: 4px;' }, [
                                 E('div', { style: 'display: flex; justify-content: space-between; align-items: center;' }, [
                                     E('div', { style: 'display: flex; align-items: center; gap: 8px;' }, [
@@ -1380,8 +1410,14 @@ return view.extend({
                             ]);
                             
                             if (st !== 'Down') {
+                                if (dlMbps !== null) {
+                                    box.appendChild(E('div', { style: 'display: flex; justify-content: space-between; font-size: 0.85em; opacity: 0.9; margin-top: 6px; border-top: 1px dashed rgba(128,128,128,0.3); padding-top: 6px;' }, [
+                                        E('span', {}, 'Throughput:'),
+                                        E('span', { style: 'color:#00bcd4;' }, '↓ ' + fmtMbps(dlMbps) + '   ↑ ' + fmtMbps(ulMbps))
+                                    ]));
+                                }
                                 var errColor = (rxErr > 0 || txErr > 0 || rxDrop > 0 || txDrop > 0) ? '#ff5252' : 'currentColor';
-                                box.appendChild(E('div', { style: 'display: flex; justify-content: space-between; font-size: 0.85em; opacity: 0.8; margin-top: 6px; border-top: 1px dashed rgba(128,128,128,0.3); padding-top: 6px;' }, [
+                                box.appendChild(E('div', { style: 'display: flex; justify-content: space-between; font-size: 0.85em; opacity: 0.8; margin-top: 6px;' }, [
                                     E('span', {}, 'Errors/Drops:'),
                                     E('span', { style: 'color:' + errColor + ';' }, 'Rx: ' + rxErr + '/' + rxDrop + ' | Tx: ' + txErr + '/' + txDrop)
                                 ]));
@@ -1492,6 +1528,31 @@ return view.extend({
                             var cleanHw = w.hardware ? w.hardware.replace(/^.*\[/, '').replace(/\]$/, '') : '';
                             var chStr = (w.channel && w.channel !== 'Unknown' && w.channel !== 'unknown' && w.channel !== '0') ? w.channel : null;
 
+                            // Regulatory domain (country code + DFS regime)
+                            var regStr = '';
+                            if (w.country && w.country !== '00' && w.country !== '') regStr = w.country + (w.dfs_region ? ' · ' + w.dfs_region : '');
+                            else if (w.country === '00') regStr = '00 · World';
+                            // Channel survey — live airtime load (busy %) + noise floor,
+                            // computed from the between-poll delta of the cumulative
+                            // survey counters so it tracks current congestion.
+                            var sv = (res.wifi_survey && res.wifi_survey[w.iface]) || null;
+                            var busyPct = -1, surveyStr = '', noiseVal = 0;
+                            if (sv) {
+                                noiseVal = parseInt(sv.noise) || 0;
+                                if (!self.prevSurvey) self.prevSurvey = {};
+                                var psv = self.prevSurvey[w.iface];
+                                var curAct = parseInt(sv.active) || 0, curBusy = parseInt(sv.busy) || 0;
+                                var curTx = parseInt(sv.tx) || 0, curRx = parseInt(sv.rx) || 0;
+                                if (psv && curAct > psv.active) {
+                                    var dAct = curAct - psv.active;
+                                    busyPct = Math.max(0, Math.min(100, Math.round((curBusy - psv.busy) / dAct * 100)));
+                                    var txPct = Math.max(0, Math.min(100, Math.round((curTx - psv.tx) / dAct * 100)));
+                                    var rxPct = Math.max(0, Math.min(100, Math.round((curRx - psv.rx) / dAct * 100)));
+                                    surveyStr = busyPct + '% busy (' + txPct + '% tx / ' + rxPct + '% rx)';
+                                }
+                                self.prevSurvey[w.iface] = { active: curAct, busy: curBusy, tx: curTx, rx: curRx };
+                            }
+
                             wifiRendered++;
                             wfNode.appendChild(E('div', { style: 'padding: 10px; background: rgba(128,128,128,0.05); border-radius: 6px; margin-bottom: 6px;' }, [
                                 E('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid rgba(128,128,128,0.2); padding-bottom: 8px;' }, [
@@ -1503,8 +1564,11 @@ return view.extend({
                                 chipMaxBr ? E('div', { class: 'hw-wifi-detail' }, 'Chip HW Max: ' + chipMaxBr + ' (' + hwMaxSp + 'x' + hwMaxSp + ' MIMO @ ' + hwMaxCw + ')') : '',
                                 cfgMaxBr ? E('div', { class: 'hw-wifi-detail', style: 'color: #00bcd4;' }, 'Config Max: ' + cfgMaxBr + ' (' + cfgMaxLabel + ')') : '',
                                 chStr ? E('div', { class: 'hw-wifi-detail' }, 'Current Channel: ' + chStr) : '',
+                                surveyStr ? E('div', { class: 'hw-wifi-detail' }, ['Channel Load: ', E('span', { style: 'color:' + getDynColor(busyPct) + ';' }, surveyStr)]) : '',
+                                noiseVal < 0 ? E('div', { class: 'hw-wifi-detail' }, 'Noise Floor: ' + noiseVal + ' dBm') : '',
                                 hwMaxCw ? E('div', { class: 'hw-wifi-detail' }, 'Max Channel Width: ' + hwMaxCw) : '',
                                 w.txpower && w.txpower !== 'Unknown' ? E('div', { class: 'hw-wifi-detail' }, 'Max TX Power: ' + w.txpower) : '',
+                                regStr ? E('div', { class: 'hw-wifi-detail' }, 'Regulatory Domain: ' + regStr) : '',
                                 suppChs && suppChs.length > 0 ? E('div', { class: 'hw-wifi-detail', style: 'margin-top:4px;' }, 'Supported Channels: ' + groupChannels(w.band, suppChs)) : '',
                                 bCap && bCap.disabled && bCap.disabled.length > 0 ? E('div', { class: 'hw-wifi-detail', style: 'color: #ff5252; font-size: 0.85em; padding-left: 8px;' }, 'Disabled (Regdomain): ' + bCap.disabled.join(', ')) : '',
                                 bCap && bCap.exceptions && bCap.exceptions.length > 0 ? E('div', { class: 'hw-wifi-detail', style: 'color: #ffb74d; font-size: 0.85em; padding-left: 8px;' }, 'Radar Detection (DFS): ' + bCap.exceptions.join(', ')) : ''
