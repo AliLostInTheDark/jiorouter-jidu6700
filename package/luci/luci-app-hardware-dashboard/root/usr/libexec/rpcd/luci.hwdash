@@ -1,5 +1,34 @@
 #!/bin/sh
 
+json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[[:cntrl:]]//g'; }
+
+read_file() {
+	local __var=$1
+	local __file=$2
+	local __default=$3
+	if [ -f "$__file" ]; then
+		read -r "$__var" 2>/dev/null < "$__file"
+		[ -z "$(eval echo "\$$__var")" ] && eval "$__var=\"\$__default\""
+	else
+		eval "$__var=\"\$__default\""
+	fi
+}
+
+# Returns 0 if cache file $1 exists and is younger than $2 seconds.
+# Used to skip recomputing static/slow-changing data (wifi, cpu caches,
+# vulnerabilities) on every poll — the dominant CPU cost was forking
+# dozens of iwinfo/iw/uci/awk subprocesses every 3s for data that rarely
+# changes. With caching, those forks happen at most once per TTL window.
+_cache_age_ok() {
+	[ -f "$1" ] || return 1
+	local _now _mt
+	_now=$(date +%s 2>/dev/null) || return 1
+	_mt=$(date -r "$1" +%s 2>/dev/null) || return 1
+	[ -n "$_mt" ] || return 1
+	[ $((_now - _mt)) -lt "$2" ]
+}
+
+
 case "$1" in
 	list)
 		echo '{ "info": { } }'
@@ -7,13 +36,19 @@ case "$1" in
 	call)
 		case "$2" in
 			info)
+				HWDASH_PERSIST_DIR=/etc/hwdash
+				if [ ! -f "$HWDASH_PERSIST_DIR/wifi_cap_v4.json" ] && command -v iw >/dev/null; then
+					mkdir -p "$HWDASH_PERSIST_DIR"
+					iw list | awk -f /usr/libexec/rpcd/luci.hwdash_wifi_cap.awk > "$HWDASH_PERSIST_DIR/wifi_cap_v4.json" 2>/dev/null
+				fi
+
 				BOARD_DETECT=$(cat /tmp/sysinfo/model 2>/dev/null)
 				[ -z "$BOARD_DETECT" ] && BOARD_DETECT=$(ubus call system board | jsonfilter -e '@.model' 2>/dev/null)
 
 				if echo "$BOARD_DETECT" | grep -q -E '^JioRouter JIDU6[0-9]01$' || [ "$BOARD_DETECT" = "JioRouter JIDU6J01" ]; then
-					CPU_MODEL="MediaTek MTK7986a (4C/4T)"
+					CPU_MODEL="MediaTek MT7986A (4C/4T)"
 				elif [ "$BOARD_DETECT" = "JioRouter JIDU6700" ]; then
-					CPU_MODEL="MediaTek MTK7981BA (2C/2T)"
+					CPU_MODEL="MediaTek MT7981BA (2C/2T)"
 				elif echo "$BOARD_DETECT" | grep -q -E '^JioRouter JIDU6[0-9]11$' || [ "$BOARD_DETECT" = "JioRouter JIDU6J11" ]; then
 					CPU_MODEL="Qualcomm IPQ9554 (4C/4T)"
 				else
@@ -73,7 +108,7 @@ case "$1" in
 				while [ -d "/sys/devices/system/cpu/cpu$i" ]; do
 					c="/sys/devices/system/cpu/cpu$i"
 					if [ -f "$c/cpufreq/scaling_cur_freq" ]; then
-						FREQ=$(cat "$c/cpufreq/scaling_cur_freq")
+						read_file FREQ "$c/cpufreq/scaling_cur_freq" "null"
 					else
 						FREQ="null"
 					fi
@@ -85,27 +120,31 @@ case "$1" in
 				CPU_FREQS="$CPU_FREQS]"
 
 
-				MEM_TOTAL=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-				MEM_FREE=$(grep MemFree /proc/meminfo | awk '{print $2}')
-				MEM_AVAIL=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-				MEM_BUFF=$(grep Buffers /proc/meminfo | awk '{print $2}')
-				MEM_CACH=$(grep ^Cached /proc/meminfo | awk '{print $2}')
-				SWAP_TOTAL=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
-				SWAP_FREE=$(grep SwapFree /proc/meminfo | awk '{print $2}')
-
-				[ -z "$MEM_TOTAL" ] && MEM_TOTAL=0
-				[ -z "$MEM_FREE" ] && MEM_FREE=0
-				[ -z "$MEM_AVAIL" ] && MEM_AVAIL=0
-				[ -z "$MEM_BUFF" ] && MEM_BUFF=0
-				[ -z "$MEM_CACH" ] && MEM_CACH=0
-				[ -z "$SWAP_TOTAL" ] && SWAP_TOTAL=0
-				[ -z "$SWAP_FREE" ] && SWAP_FREE=0
+				MEM_TOTAL=0; MEM_FREE=0; MEM_AVAIL=0; MEM_BUFF=0; MEM_CACH=0; SWAP_TOTAL=0; SWAP_FREE=0; MEM_SLAB=0; MEM_PAGETABLES=0
+				while read -r key val _; do
+					case "$key" in
+						MemTotal:) MEM_TOTAL=$val ;;
+						MemFree:) MEM_FREE=$val ;;
+						MemAvailable:) MEM_AVAIL=$val ;;
+						Buffers:) MEM_BUFF=$val ;;
+						Cached:) MEM_CACH=$val ;;
+						SwapTotal:) SWAP_TOTAL=$val ;;
+						SwapFree:) SWAP_FREE=$val ;;
+						Slab:) MEM_SLAB=$val ;;
+						PageTables:) MEM_PAGETABLES=$val ;;
+					esac
+				done < /proc/meminfo
 
 				ZRAM_TOTAL=0
 				ZRAM_USED=0
+				ZRAM_ORIG=0
 				if [ -f /sys/block/zram0/disksize ]; then
-					ZRAM_TOTAL=$(( $(cat /sys/block/zram0/disksize 2>/dev/null || echo 0) / 1024 ))
-					ZRAM_USED=$(( $(cat /sys/block/zram0/compr_data_size 2>/dev/null || echo 0) / 1024 ))
+					read_file zsize /sys/block/zram0/disksize 0
+					read_file zused /sys/block/zram0/compr_data_size 0
+					read_file zorig /sys/block/zram0/orig_data_size 0
+					ZRAM_TOTAL=$(( zsize / 1024 ))
+					ZRAM_USED=$(( zused / 1024 ))
+					ZRAM_ORIG=$(( zorig / 1024 ))
 				fi
 
 				get_disk_meta() {
@@ -149,12 +188,19 @@ case "$1" in
 							ubi_vol=${ubi_vol#ubi}
 							local ubi_dev=${ubi_vol%_*}
 							local mtd_num=$(cat "/sys/class/ubi/ubi${ubi_dev}/mtd_num" 2>/dev/null)
-							parent=$dev
+							# Do NOT set parent=$dev — that would read the UBI volume size
+							# (e.g. 26 MB for rootfs), not the physical NAND chip size.
+							# Read the parent MTD device size directly here instead.
+							parent=""
 							if [ -n "$mtd_num" ] && [ -f "/sys/class/mtd/mtd${mtd_num}/type" ]; then
 								local t=$(cat "/sys/class/mtd/mtd${mtd_num}/type" 2>/dev/null)
 								if [ "$t" = "nand" ]; then dtype="NAND"
 								elif [ "$t" = "nor" ]; then dtype="NOR"
 								else dtype="Flash"
+								fi
+								if [ -f "/sys/class/mtd/mtd${mtd_num}/size" ]; then
+									local sz=$(cat "/sys/class/mtd/mtd${mtd_num}/size" 2>/dev/null)
+									[ -n "$sz" ] && psize=$((sz / 1024))
 								fi
 							else
 								dtype="NAND/NOR"
@@ -162,8 +208,10 @@ case "$1" in
 							;;
 						sd*)
 							parent=${dev%%[0-9]*}
-							local rot=$(cat "/sys/class/block/$parent/queue/rotational" 2>/dev/null)
-							if [ "$rot" = "1" ]; then dtype="HDD"
+							rot=$(cat "/sys/class/block/$parent/queue/rotational" 2>/dev/null)
+							rem=$(cat "/sys/class/block/$parent/removable" 2>/dev/null)
+							if [ "$rem" = "1" ]; then dtype="USB"
+							elif [ "$rot" = "1" ]; then dtype="HDD"
 							elif [ "$rot" = "0" ]; then dtype="SSD"
 							else dtype="USB/SATA"
 							fi
@@ -200,9 +248,10 @@ case "$1" in
 					esac
 
 					devname=${fs##*/}
+					realdev=""
 					if [ "$mountpoint" = "/" ]; then
 						devname="root"
-						ubiblk=$(ls -la /sys/class/block/ 2>/dev/null | awk -F/ '{print $NF}' | grep "^ubiblock" | head -1)
+						ubiblk=$(ls /sys/class/block/ 2>/dev/null | grep "^ubiblock" | head -1)
 						if [ -n "$ubiblk" ]; then
 							realdev="$ubiblk"
 						else
@@ -212,8 +261,12 @@ case "$1" in
 					fi
 
 					if [ -b "$fs" ] || [ -c "$fs" ]; then
-						maj=$(ls -ln "$fs" 2>/dev/null | awk '{print $5}' | tr -d ',')
-						min=$(ls -ln "$fs" 2>/dev/null | awk '{print $6}')
+						# ls -ln prints "major," and "minor" in fields 5 and 6 for a
+						# device node; read once instead of two ls|awk pipelines.
+						read -r _ _ _ _ maj min _ <<EOF
+$(ls -ln "$fs" 2>/dev/null)
+EOF
+						maj=${maj%,}
 						if [ -n "$maj" ] && [ -n "$min" ]; then
 							realdev=$(awk -v maj="$maj" -v min="$min" '$1==maj && $2==min {print $3}' /proc/diskstats 2>/dev/null)
 						fi
@@ -266,7 +319,7 @@ EOF
 					esac
 					block_count=$((block_count + 1))
 					case "$bname" in
-						*p[0-9]*|[a-z]*[0-9]) continue ;;
+						*p[0-9]*|[shv]d[a-z][0-9]*) continue ;;
 					esac
 					if [ -f "$dev/size" ]; then
 						sz=$(cat "$dev/size" 2>/dev/null)
@@ -290,12 +343,27 @@ EOF
 					fi
 				done
 
+				mtd_phys=0
 				if [ "$max_mtd" -gt 0 ]; then
 					if [ "$sum_mtd" -ge "$((max_mtd * 19 / 10))" ] && [ "$sum_mtd" -le "$((max_mtd * 21 / 10))" ]; then
+						mtd_phys=$max_mtd
 						total_phys=$((total_phys + max_mtd))
 					else
+						mtd_phys=$sum_mtd
 						total_phys=$((total_phys + sum_mtd))
 					fi
+				fi
+
+				# NAND/NOR flash chips are always power-of-two sized. MediaTek layouts
+				# (and some others) don't expose a partition spanning the whole device
+				# and reserve a tail region, so the partition sum lands just under the
+				# real chip size (e.g. ~240 MB of partitions on a 256 MB chip). Round
+				# the reported physical total up to the next power of two so it reflects
+				# the actual chip rather than the partitioned area.
+				if [ "$mtd_phys" -gt 0 ]; then
+					_p2=1
+					while [ "$_p2" -lt "$mtd_phys" ]; do _p2=$((_p2 * 2)); done
+					mtd_phys=$_p2
 				fi
 
 
@@ -314,8 +382,8 @@ EOF
 				SEEN_TYPES=" "
 				for t in /sys/class/thermal/thermal_zone*; do
 					if [ -f "$t/type" ] && [ -f "$t/temp" ]; then
-						TYPE=$(cat "$t/type")
-						TEMP=$(cat "$t/temp")
+						read_file TYPE "$t/type" "Unknown"
+						read_file TEMP "$t/temp" "0"
 						CRIT_TEMP="null"
 						PASS_TEMP="null"
 						for trip in "$t"/trip_point_*_type; do
@@ -330,30 +398,62 @@ EOF
 						done
 						SEEN_TYPES="${SEEN_TYPES}${TYPE} "
 						if [ $FIRST -eq 0 ]; then THERMALS="$THERMALS,"; fi
-						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
+						THERMALS="$THERMALS{\"type\":\"$(json_str "$TYPE")\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
 						FIRST=0
 					fi
 				done
 				for h in /sys/class/hwmon/hwmon*; do
-					if [ -f "$h/name" ] && [ -f "$h/temp1_input" ]; then
-						TYPE=$(cat "$h/name")
+					[ -d "$h" ] || continue
+					TYPE_BASE=$(cat "$h/name" 2>/dev/null || echo "Unknown")
+					for tinput in "$h"/temp*_input; do
+						[ -f "$tinput" ] || continue
+						TEMP=$(cat "$tinput" 2>/dev/null)
+						[ -z "$TEMP" ] && continue
+						
+						LABEL=""
+						[ -f "${tinput%_input}_label" ] && LABEL=$(cat "${tinput%_input}_label" 2>/dev/null | tr -d '\r\n')
+						
+						if [ -n "$LABEL" ]; then
+							TYPE="${TYPE_BASE} ($LABEL)"
+						else
+							TYPE="${TYPE_BASE}"
+						fi
+						
 						case "$SEEN_TYPES" in
 							*" $TYPE "*) continue ;;
 						esac
-						TEMP=$(cat "$h/temp1_input")
+						SEEN_TYPES="${SEEN_TYPES}${TYPE} "
+						
 						CRIT_TEMP="null"
 						PASS_TEMP="null"
-						if [ -f "$h/temp1_crit" ]; then
-							CRIT_TEMP=$(cat "$h/temp1_crit")
+						
+						if [ -f "${tinput%_input}_crit" ]; then
+							CRIT_TEMP=$(cat "${tinput%_input}_crit" 2>/dev/null)
+						elif [ -f "${tinput%_input}_emergency" ]; then
+							CRIT_TEMP=$(cat "${tinput%_input}_emergency" 2>/dev/null)
 						fi
-						if [ -f "$h/temp1_max" ]; then
-							PASS_TEMP=$(cat "$h/temp1_max")
+						
+						if [ -f "${tinput%_input}_max" ]; then
+							PASS_TEMP=$(cat "${tinput%_input}_max" 2>/dev/null)
 						fi
-						SEEN_TYPES="${SEEN_TYPES}${TYPE} "
+						
+						if [ "$CRIT_TEMP" = "null" ] && [ "$PASS_TEMP" = "null" ] && [ -d "$h/device" ]; then
+							for trip in "$h/device"/trip_point_*_type; do
+								[ -f "$trip" ] || continue
+								trip_type=$(cat "$trip" 2>/dev/null | tr -d '\r\n')
+								trip_temp_file="${trip%_type}_temp"
+								if [ "$trip_type" = "critical" ] || [ "$trip_type" = "hot" ] || [ "$trip_type" = "emergency" ]; then
+									[ -f "$trip_temp_file" ] && CRIT_TEMP=$(cat "$trip_temp_file" 2>/dev/null)
+								elif [ "$trip_type" = "passive" ] || [ "$trip_type" = "active" ] || [ "$trip_type" = "max" ]; then
+									[ -f "$trip_temp_file" ] && PASS_TEMP=$(cat "$trip_temp_file" 2>/dev/null)
+								fi
+							done
+						fi
+						
 						if [ $FIRST -eq 0 ]; then THERMALS="$THERMALS,"; fi
-						THERMALS="$THERMALS{\"type\":\"$TYPE\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
+						THERMALS="$THERMALS{\"type\":\"$(json_str "$TYPE")\",\"temp\":$TEMP,\"crit\":$CRIT_TEMP,\"pass\":$PASS_TEMP}"
 						FIRST=0
-					fi
+					done
 				done
 				THERMALS="$THERMALS]"
 
@@ -364,28 +464,28 @@ EOF
 				MAX_FREQ_KHZ=$(cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq 2>/dev/null | sort -nr | head -n 1)
 				[ -z "$MAX_FREQ_KHZ" ] && MAX_FREQ_KHZ=0
 				
-				LOAD_AVG=$(cat /proc/loadavg 2>/dev/null)
-				LOAD_1=$(echo "$LOAD_AVG" | awk '{print $1}')
-				LOAD_5=$(echo "$LOAD_AVG" | awk '{print $2}')
-				LOAD_15=$(echo "$LOAD_AVG" | awk '{print $3}')
-				TASKS=$(echo "$LOAD_AVG" | awk '{print $4}')
+				read -r LOAD_1 LOAD_5 LOAD_15 TASKS _ < /proc/loadavg
 				[ -z "$TASKS" ] && TASKS="0/0"
 
 
-				UPTIME=$(cut -d. -f1 /proc/uptime)
+				read -r UPTIME _ < /proc/uptime 2>/dev/null; UPTIME=${UPTIME%%.*}
 				
 
-				CPU_GOV=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)
-				[ -z "$CPU_GOV" ] && CPU_GOV="unknown"
+				read_file CPU_GOV /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "unknown"
 
 
 				CONN_COUNT=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null)
 				CONN_MAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)
 				[ -z "$CONN_COUNT" ] && CONN_COUNT=0
 				[ -z "$CONN_MAX" ] && CONN_MAX=0
-				CTXT=$(awk '/^ctxt/ {print $2}' /proc/stat 2>/dev/null)
+				# One pass over /proc/stat for aggregate CPU ticks, context switches
+				# and interrupts — previously three separate awk/while reads of the
+				# same file.
+				read CPU_TICKS CTXT INTR <<EOF
+$(awk '/^cpu /{t=$2+$3+$4+$5+$6+$7+$8+$9} /^ctxt /{c=$2} /^intr /{i=$2} END{print t" "c" "i}' /proc/stat 2>/dev/null)
+EOF
+				[ -z "$CPU_TICKS" ] && CPU_TICKS=0
 				[ -z "$CTXT" ] && CTXT=0
-				INTR=$(awk '/^intr/ {print $2}' /proc/stat 2>/dev/null)
 				[ -z "$INTR" ] && INTR=0
 
 
@@ -398,11 +498,15 @@ EOF
 							lo|wlan*|wl*|ath*|br*|tun*|tap*|veth*|wg*|pppoe*|*ifb*|mon.*|gre*|ipsec*|phy*|*ap*|*sta*) continue ;;
 						esac
 						if [ -f "$netdev/speed" ]; then
-							speed=$(cat "$netdev/speed" 2>/dev/null)
-							duplex=$(cat "$netdev/duplex" 2>/dev/null)
+							read_file speed "$netdev/speed" ""
+							read_file duplex "$netdev/duplex" ""
+							read_file rx_d "$netdev/statistics/rx_dropped" "0"
+							read_file tx_d "$netdev/statistics/tx_dropped" "0"
+							read_file rx_e "$netdev/statistics/rx_errors" "0"
+							read_file tx_e "$netdev/statistics/tx_errors" "0" 
 							if [ "$speed" = "-1" ] || [ -z "$speed" ]; then speed="Down"; fi
 							if [ $FIRST_ETH -eq 0 ]; then ETH_LINKS="$ETH_LINKS,"; fi
-							ETH_LINKS="$ETH_LINKS{\"iface\":\"$eth\",\"speed\":\"$speed\",\"duplex\":\"$duplex\"}"
+							ETH_LINKS="$ETH_LINKS{\"iface\":\"$eth\",\"speed\":\"$speed\",\"duplex\":\"$duplex\",\"rx_drop\":$rx_d,\"tx_drop\":$tx_d,\"rx_err\":$rx_e,\"tx_err\":$tx_e}"
 							FIRST_ETH=0
 						fi
 					fi
@@ -414,91 +518,535 @@ EOF
 				TX_TOTAL=0
 				while read -r line; do
 					case "$line" in
-						*:) ;;
-						*)
-							rx=$(echo "$line" | awk -F: '{print $2}' | awk '{print $1}')
-							tx=$(echo "$line" | awk -F: '{print $2}' | awk '{print $9}')
-							RX_TOTAL=$((RX_TOTAL + rx))
-							TX_TOTAL=$((TX_TOTAL + tx))
+						*:*)
+							rest="${line#*:}"
+							set -- $rest
+							RX_TOTAL=$((RX_TOTAL + ${1:-0}))
+							TX_TOTAL=$((TX_TOTAL + ${9:-0}))
 							;;
 					esac
 				done < /proc/net/dev
 
+				BLOCK_DEVS="["
+				FIRST_BDEV=1
+				for dev in /sys/class/block/*; do
+					[ ! -d "$dev" ] && continue
+					devname=${dev##*/}
+					# Ignore loop, ram, mtd blocks
+					case "$devname" in
+						loop*|ram*|mtdblock*) continue ;;
+					esac
+					
+					# Get model/type
+					model="Unknown"
+					dtype="Unknown"
+					removable="0"
+					health="Unknown"
+					
+					if [ -f "$dev/removable" ]; then
+						removable=$(cat "$dev/removable" 2>/dev/null)
+					fi
+					
+					case "$devname" in
+						mmcblk*)
+							dtype="eMMC/SD"
+							[ -f "$dev/device/name" ] && model=$(cat "$dev/device/name" 2>/dev/null)
+							if [ -f "$dev/device/life_time" ]; then
+								health=$(cat "$dev/device/life_time" 2>/dev/null)
+							fi
+							;;
+						nvme*)
+							dtype="NVMe"
+							[ -f "$dev/device/model" ] && model=$(cat "$dev/device/model" 2>/dev/null)
+							;;
+						sd*)
+							parent=${devname%%[0-9]*}
+							rot=$(cat "/sys/class/block/$parent/queue/rotational" 2>/dev/null)
+							if [ "$removable" = "1" ]; then dtype="USB"
+							elif [ "$rot" = "1" ]; then dtype="HDD"
+							elif [ "$rot" = "0" ]; then dtype="SSD"
+							else dtype="USB/SATA"
+							fi
+							[ -f "/sys/class/block/$parent/device/model" ] && model=$(cat "/sys/class/block/$parent/device/model" 2>/dev/null)
+							;;
+					esac
+					
+					# Get size
+					size_bytes=0
+					[ -f "$dev/size" ] && size_bytes=$(($(cat "$dev/size" 2>/dev/null) * 512))
+					
+					# Get IO stats
+					read_bytes=0
+					write_bytes=0
+					read_ios=0
+					write_ios=0
+					if [ -f "$dev/stat" ]; then
+						# /sys/block/X/stat fields: 1=read ios, 3=sectors read,
+						# 5=write ios, 7=sectors written. One builtin read instead
+						# of cat + four echo|awk pipelines.
+						read _rio _ _rsec _ _wio _ _wsec _ < "$dev/stat" 2>/dev/null
+						read_ios=${_rio:-0}
+						write_ios=${_wio:-0}
+						read_bytes=$(( ${_rsec:-0} * 512 ))
+						write_bytes=$(( ${_wsec:-0} * 512 ))
+					fi
+					
+					# Find mount info
+					mount_point=""
+					fs_type="Unknown"
+					binfo=$(block info "/dev/$devname" 2>/dev/null)
+					if [ -n "$binfo" ]; then
+						fs_type=$(echo "$binfo" | grep -o 'TYPE="[^"]*"' | cut -d'"' -f2)
+						mount_point=$(echo "$binfo" | grep -o 'MOUNT="[^"]*"' | cut -d'"' -f2)
+					fi
+					if [ -z "$fs_type" ] || [ "$fs_type" = "Unknown" ]; then
+						mount_info=$(df -T | grep -w "/dev/$devname" | head -n 1)
+						if [ -n "$mount_info" ]; then
+							fs_type=$(echo "$mount_info" | awk '{print $2}')
+							mount_point=$(echo "$mount_info" | awk '{print $7}')
+						fi
+					fi
+					
+					model=$(echo "$model" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^[[:space:]]*//; s/[[:space:]]*$//')
+					[ -z "$model" ] && model="Storage Device"
+					
+					if [ $FIRST_BDEV -eq 0 ]; then BLOCK_DEVS="$BLOCK_DEVS,"; fi
+					BLOCK_DEVS="$BLOCK_DEVS{\"dev\":\"$devname\",\"model\":\"$model\",\"type\":\"$dtype\",\"size\":\"$size_bytes\",\"read\":\"$read_bytes\",\"write\":\"$write_bytes\",\"read_ios\":\"$read_ios\",\"write_ios\":\"$write_ios\",\"fs\":\"$fs_type\",\"mount\":\"$mount_point\",\"removable\":\"$removable\",\"health\":\"$health\"}"
+					FIRST_BDEV=0
+				done
+				BLOCK_DEVS="$BLOCK_DEVS]"
+
+				USB_PORTS="["
+				FIRST_USB=1
+				for usb in /sys/bus/usb/devices/usb*; do
+					[ -f "$usb/speed" ] || continue
+					read_file speed "$usb/speed" "0"
+					read_file product "$usb/product" "USB Host Controller"
+					if [ $FIRST_USB -eq 0 ]; then USB_PORTS="$USB_PORTS,"; fi
+					USB_PORTS="$USB_PORTS{\"speed\":\"$speed\",\"product\":\"$(json_str "$product")\"}"
+					FIRST_USB=0
+				done
+				USB_PORTS="$USB_PORTS]"
+
 				USB_DEVS="["
 				FIRST_USB=1
 				for usb in /sys/bus/usb/devices/*; do
-					if [ -f "$usb/speed" ] && [ -f "$usb/idVendor" ]; then
-						product=$(cat "$usb/product" 2>/dev/null || echo "Unknown Device")
-						manufacturer=$(cat "$usb/manufacturer" 2>/dev/null || echo "")
-						speed=$(cat "$usb/speed" 2>/dev/null || echo "Unknown")
-						version=$(cat "$usb/version" 2>/dev/null || echo "")
-						
-						if [ -n "$manufacturer" ]; then
-							name="$manufacturer $product"
-						else
-							name="$product"
-						fi
-						# Escape quotes
-						name=$(echo "$name" | sed 's/"/\\"/g')
-						
-						if [ $FIRST_USB -eq 0 ]; then USB_DEVS="$USB_DEVS,"; fi
-						USB_DEVS="$USB_DEVS{\"name\":\"$name\",\"speed\":\"$speed\",\"version\":\"$version\"}"
-						FIRST_USB=0
+					devname=${usb##*/}
+					case "$devname" in
+						usb*|*:*) continue ;;
+						*-*) ;;
+						*) continue ;;
+					esac
+					[ -f "$usb/idVendor" ] || continue
+					[ -f "$usb/speed" ] || continue
+					read_file product "$usb/product" ""
+					read_file manufacturer "$usb/manufacturer" ""
+					read_file speed "$usb/speed" "Unknown"
+					read_file version "$usb/version" ""
+					[ -z "$product" ] && [ -z "$manufacturer" ] && continue
+					if [ -n "$manufacturer" ]; then
+						dev_name="$manufacturer $product"
+					else
+						dev_name="$product"
 					fi
+					if [ $FIRST_USB -eq 0 ]; then USB_DEVS="$USB_DEVS,"; fi
+					USB_DEVS="$USB_DEVS{\"name\":\"$(json_str "$dev_name")\",\"speed\":\"$speed\",\"version\":\"$(json_str "$version")\"}"
+					FIRST_USB=0
 				done
 				USB_DEVS="$USB_DEVS]"
 
+				PCIE_DEVS="["
+				FIRST_PCIE=1
+				for pci in /sys/bus/pci/devices/*; do
+					if [ -f "$pci/current_link_speed" ]; then
+						read_file vendor "$pci/vendor" "Unknown"
+						read_file device "$pci/device" "Unknown"
+						read_file speed "$pci/current_link_speed" "Unknown"
+						read_file width "$pci/current_link_width" "Unknown"
+						read_file max_speed "$pci/max_link_speed" "Unknown"
+						read_file max_width "$pci/max_link_width" "Unknown"
+						name="PCIe Device ($vendor:$device)"
+						
+						if [ $FIRST_PCIE -eq 0 ]; then PCIE_DEVS="$PCIE_DEVS,"; fi
+						PCIE_DEVS="$PCIE_DEVS{\"name\":\"$name\",\"speed\":\"$speed\",\"width\":\"$width\",\"max_speed\":\"$max_speed\",\"max_width\":\"$max_width\"}"
+						FIRST_PCIE=0
+					fi
+				done
+				PCIE_DEVS="$PCIE_DEVS]"
+
+				# WiFi radio info is the single biggest CPU cost (dozens of
+				# iwinfo/iw/uci/awk forks per radio). Channel/txpower/bitrate
+				# change slowly, so cache the whole block for 20s.
+				WIFI_CACHE=/tmp/hwdash_wifi_radios_v1.json
+				if _cache_age_ok "$WIFI_CACHE" 20; then
+					WIFI_RADIOS=$(cat "$WIFI_CACHE" 2>/dev/null)
+					[ -z "$WIFI_RADIOS" ] && WIFI_RADIOS="[]"
+				else
 				WIFI_RADIOS="["
 				FIRST_WIFI=1
 				if command -v iwinfo >/dev/null; then
 					for iface in $(iwinfo | awk '/^[a-zA-Z0-9_-]+/ {print $1}'); do
 						info=$(iwinfo "$iface" info 2>/dev/null)
-						
 						txpower=$(echo "$info" | awk -F'Tx-Power: ' '/Tx-Power:/ {print $2}' | awk '{print $1" "$2}')
 						[ -z "$txpower" ] && txpower="Unknown"
-						
-						noise=$(echo "$info" | awk -F'Noise: ' '/Noise:/ {print $2}' | awk '{print $1" "$2}')
-						[ -z "$noise" ] || [ "$noise" = "unknown" ] && noise="Unknown"
-						
-						bitrate=$(echo "$info" | awk -F'Bit Rate: ' '/Bit Rate:/ {print $2}' | awk '{print $1" "$2}')
-						[ -z "$bitrate" ] || [ "$bitrate" = "unknown" ] && bitrate="Unknown"
-						
-						channel=$(echo "$info" | awk -F'Channel: ' '/Channel:/ {print $2}' | awk '{print $1}')
-						[ -z "$channel" ] || [ "$channel" = "unknown" ] && channel="Unknown"
 
-						freq=$(echo "$info" | awk -F'[(/]' '/Channel:/ {print $2}' | sed 's/[^0-9.]*//g')
-						if [ -n "$freq" ]; then
-							if echo "$freq" | grep -q "^2\."; then band="2.4 GHz"
-							elif echo "$freq" | grep -q "^5\."; then band="5 GHz"
-							elif echo "$freq" | grep -q "^6\."; then band="6 GHz"
-							else band="$freq GHz"
+						hwmode=$(echo "$info" | awk -F'HW Mode\\(s\\): ' '/HW Mode\(s\):/ {print $2}')
+						[ -z "$hwmode" ] && hwmode="Unknown"
+
+						hardware=$(echo "$info" | grep "Hardware:" | awk -F': ' '{print $2}')
+						[ -z "$hardware" ] && hardware="Unknown"
+
+						channel=$(echo "$info" | awk -F'Channel: ' '/Channel:/ {print $2}' | awk '{print $1}')
+						{ [ -z "$channel" ] || [ "$channel" = "unknown" ]; } && channel="Unknown"
+
+						curr_width=$(echo "$info" | awk -F'Width: ' '/Width:/ {print $2}' | awk '{print $1}')
+						[ -z "$curr_width" ] && curr_width="0"
+
+						# Band detection: take ONLY the first numeric token inside the
+						# Channel "(...)" group (the frequency in GHz). The old parser
+						# stripped every non-digit on the line, so when the channel read
+						# "unknown" it scraped the "20" out of "HT Mode: HE20" and
+						# reported a bogus "20 GHz" for the 2.4 GHz radio.
+						freq=$(echo "$info" | sed -n 's/.*Channel:[^(]*(\([0-9][0-9.]*\).*/\1/p' | head -1)
+						case "$freq" in
+							2.*) band="2.4 GHz" ;;
+							5.*) band="5 GHz" ;;
+							6.*|7.*) band="6 GHz" ;;
+							*)   band="Unknown" ;;
+						esac
+						# Fall back to the channel number when the frequency was not a
+						# plausible GHz value (channel unknown, or reported in MHz).
+						if [ "$band" = "Unknown" ] && [ "$channel" != "Unknown" ]; then
+							case "$channel" in
+								[1-9]|1[0-4])               band="2.4 GHz" ;;
+								3[6-9]|[4-9][0-9]|1[0-9][0-9]) band="5 GHz" ;;
+							esac
+						fi
+
+						# sysfs is the authoritative, always-present phy name. Prefer it
+						# over scraping iwinfo text — when the driver returns a partial
+						# "info" block (the same transient that drops the channel) the
+						# "Phy name:" line is missing, phycap lookup misses and Chip HW
+						# Max vanishes. sysfs keeps phyname (and thus phycap) stable.
+						phyname=$(cat /sys/class/net/"$iface"/phy80211/name 2>/dev/null)
+						[ -z "$phyname" ] && phyname=$(echo "$info" | grep "Phy name:" | awk '{print $3}')
+						[ -z "$phyname" ] && phyname=$(iw dev "$iface" info 2>/dev/null | grep wiphy | awk '{print "phy"$2}')
+						[ -z "$phyname" ] && phyname="Unknown"
+
+						bitrate=$(echo "$info" | awk -F'Bit Rate: ' '/Bit Rate:/ {print $2}' | awk '{print $1" "$2}')
+						{ [ -z "$bitrate" ] || [ "$bitrate" = "unknown" ]; } && bitrate="Unknown"
+
+						phycap="{}"
+						if [ -f "$HWDASH_PERSIST_DIR/wifi_cap_v4.json" ] && [ "$phyname" != "Unknown" ]; then
+							phycap_str=$(jsonfilter -i "$HWDASH_PERSIST_DIR/wifi_cap_v4.json" -e "@.$phyname" 2>/dev/null)
+							[ -n "$phycap_str" ] && phycap="$phycap_str"
+						fi
+
+						cfg_nss="0"
+						if [ "$phyname" != "Unknown" ]; then
+							uci_radio=$(uci show wireless 2>/dev/null | grep "\.phy='${phyname}'" | cut -d'.' -f2 | head -1)
+							if [ -n "$uci_radio" ]; then
+								n=$(uci get "wireless.${uci_radio}.nss" 2>/dev/null)
+								[ -n "$n" ] && cfg_nss="$n"
 							fi
-						else
-							band="Unknown"
+						fi
+
+						hw_nss=0
+						if [ "$phyname" != "Unknown" ] && command -v iw >/dev/null; then
+							hw_nss=$(iw phy "$phyname" info 2>/dev/null | awk '
+								/MCS rate indexes supported:/ {
+									split($NF, a, "-"); n = int(a[2] / 8) + 1; if (n > m) m = n
+								}
+								/[0-9]+ streams: MCS/ { n = $1 + 0; if (n > m) m = n }
+								END { print m + 0 }
+							')
+							[ -z "$hw_nss" ] && hw_nss=0
+						fi
+
+						freqlist=$(iwinfo "$iface" freqlist 2>/dev/null)
+						enabled_ch=""
+						if [ -n "$freqlist" ]; then
+							enabled_ch=$(echo "$freqlist" | grep -oE "Channel [0-9]+" | awk '{print $2}' | tr '\n' ',' | sed 's/,$//')
 						fi
 
 						if [ $FIRST_WIFI -eq 0 ]; then WIFI_RADIOS="$WIFI_RADIOS,"; fi
-						WIFI_RADIOS="$WIFI_RADIOS{\"iface\":\"$iface\",\"band\":\"$band\",\"txpower\":\"$txpower\",\"noise\":\"$noise\",\"bitrate\":\"$bitrate\",\"channel\":\"$channel\"}"
+						WIFI_RADIOS="$WIFI_RADIOS{\"iface\":\"$iface\",\"phy\":\"$phyname\",\"band\":\"$band\",\"txpower\":\"$txpower\",\"hwmode\":\"$hwmode\",\"hardware\":\"$hardware\",\"channel\":\"$channel\",\"curr_width\":\"$curr_width\",\"cfg_nss\":\"$cfg_nss\",\"hw_nss\":$hw_nss,\"channels\":\"$enabled_ch\",\"bitrate\":\"$bitrate\",\"phycap\":$phycap}"
 						FIRST_WIFI=0
 					done
 				fi
 				WIFI_RADIOS="$WIFI_RADIOS]"
-				
+				printf '%s' "$WIFI_RADIOS" > "$WIFI_CACHE.$$" 2>/dev/null && mv "$WIFI_CACHE.$$" "$WIFI_CACHE" 2>/dev/null
+				fi
 
-				MEM_SLAB=$(grep '^Slab:' /proc/meminfo | awk '{print $2}')
-				[ -z "$MEM_SLAB" ] && MEM_SLAB=0
-				MEM_PAGETABLES=$(grep '^PageTables:' /proc/meminfo | awk '{print $2}')
-				[ -z "$MEM_PAGETABLES" ] && MEM_PAGETABLES=0
 
-				CPU_TICKS=$(awk '/^cpu / {print $2+$3+$4+$5+$6+$7+$8+$9+$10+$11}' /proc/stat 2>/dev/null)
-				[ -z "$CPU_TICKS" ] && CPU_TICKS=0
 
+				# UBI device tree + MTD partition table are hardware inventory:
+				# the layout is fixed at flash time and wear/ECC counters move on
+				# minute-plus timescales. Enumerating them every poll was the
+				# largest remaining fork cluster (~one cat per MTD partition for
+				# the type, plus json_str). Cache the assembled JSON for 30s, the
+				# same volatile pattern used for the WiFi block. postinst clears
+				# /tmp/hwdash_* on upgrade so the schema can never go stale.
+				STORAGE_INV_CACHE=/tmp/hwdash_storage_inv_v1.sh
+				UBI_DEVS=""; MTD_PARTS=""; UBI_MAX_EC=0; UBI_BAD_PEB=0
+				if _cache_age_ok "$STORAGE_INV_CACHE" 30; then
+					. "$STORAGE_INV_CACHE" 2>/dev/null
+				fi
+				if [ -z "$MTD_PARTS" ]; then
+				# Legacy UBI compat
 				UBI_MAX_EC=0
 				UBI_BAD_PEB=0
 				[ -f /sys/class/ubi/ubi0/max_ec ] && UBI_MAX_EC=$(cat /sys/class/ubi/ubi0/max_ec 2>/dev/null || echo 0)
 				[ -f /sys/class/ubi/ubi0/bad_peb_count ] && UBI_BAD_PEB=$(cat /sys/class/ubi/ubi0/bad_peb_count 2>/dev/null || echo 0)
 
-				echo "{\"model\":\"$CPU_MODEL\", \"cpus\":$CPUS, \"cpu_meta\":{\"cores\":$PHYSICAL_CORES, \"threads\":$LOGICAL_CPUS, \"max_freq\":$MAX_FREQ_KHZ, \"tasks\":\"$TASKS\", \"load_1\":\"$LOAD_1\", \"load_5\":\"$LOAD_5\", \"load_15\":\"$LOAD_15\", \"governor\":\"$CPU_GOV\", \"conntrack\":$CONN_COUNT, \"conntrack_max\":$CONN_MAX, \"ctxt\":$CTXT, \"intr\":$INTR, \"sys_ticks\":$CPU_TICKS}, \"freqs\":$CPU_FREQS, \"mem\":{\"total\":$MEM_TOTAL, \"free\":$MEM_FREE, \"avail\":$MEM_AVAIL, \"buffers\":$MEM_BUFF, \"cached\":$MEM_CACH, \"swap_total\":$SWAP_TOTAL, \"swap_free\":$SWAP_FREE, \"zram_total\":$ZRAM_TOTAL, \"zram_used\":$ZRAM_USED, \"slab\":$MEM_SLAB, \"pagetables\":$MEM_PAGETABLES}, \"df\":$DF_JSON, \"inodes\":$DF_INODES, \"storage_total_phys\":$total_phys, \"mtd_count\":$mtd_count, \"block_count\":$block_count, \"diskstats\":$DSK_STATS, \"thermals\":$THERMALS, \"uptime\":$UPTIME, \"net\":{\"rx\":$RX_TOTAL, \"tx\":$TX_TOTAL}, \"eth_links\":$ETH_LINKS, \"usb_devs\":$USB_DEVS, \"wifi_radios\":$WIFI_RADIOS, \"ubi_max_ec\":$UBI_MAX_EC, \"ubi_bad_peb\":$UBI_BAD_PEB}"
+				# Full UBI device enumeration
+				UBI_DEVS="["
+				FIRST_UBI_DEV=1
+				for ubi_dp in /sys/class/ubi/ubi[0-9]*; do
+					[ -d "$ubi_dp" ] || continue
+					ubi_nm=${ubi_dp##*/}
+					case "$ubi_nm" in *_*) continue ;; esac
+					read_file u_total "$ubi_dp/total_eraseblocks" 0
+					read_file u_avail "$ubi_dp/avail_eraseblocks" 0
+					read_file u_bad "$ubi_dp/bad_peb_count" 0
+					read_file u_max_ec "$ubi_dp/max_ec" 0
+					read_file u_min_ec "$ubi_dp/min_ec" 0
+					read_file u_eb_sz "$ubi_dp/eraseblock_size" 0
+					read_file u_mtd_num "$ubi_dp/mtd_num" 0
+					nw=0; ne=0; no=0
+					[ -f "/sys/class/mtd/mtd${u_mtd_num}/writesize" ] && read_file nw "/sys/class/mtd/mtd${u_mtd_num}/writesize" 0
+					[ -f "/sys/class/mtd/mtd${u_mtd_num}/erasesize" ] && read_file ne "/sys/class/mtd/mtd${u_mtd_num}/erasesize" 0
+					[ -f "/sys/class/mtd/mtd${u_mtd_num}/oobsize" ] && read_file no "/sys/class/mtd/mtd${u_mtd_num}/oobsize" 0
+					VOLS="["
+					FV=1
+					for vp in /sys/class/ubi/${ubi_nm}_[0-9]*; do
+						[ -d "$vp" ] || continue
+						read_file vn "$vp/name" ""
+						[ -z "$vn" ] && continue
+						read_file vt "$vp/type" "dynamic"
+						read_file vd "$vp/data_bytes" 0
+						read_file vr "$vp/reserved_ebs" 0
+						read_file veb "$vp/usable_eb_size" 0
+						[ $FV -eq 0 ] && VOLS="$VOLS,"
+						VOLS="$VOLS{\"name\":\"$(json_str "$vn")\",\"type\":\"$vt\",\"data_bytes\":$vd,\"reserved_ebs\":$vr,\"eb_size\":$veb}"
+						FV=0
+					done
+					VOLS="$VOLS]"
+					[ $FIRST_UBI_DEV -eq 0 ] && UBI_DEVS="$UBI_DEVS,"
+					UBI_DEVS="$UBI_DEVS{\"dev\":\"$ubi_nm\",\"total_ebs\":$u_total,\"avail_ebs\":$u_avail,\"bad_pebs\":$u_bad,\"max_ec\":$u_max_ec,\"min_ec\":$u_min_ec,\"eb_size\":$u_eb_sz,\"mtd_num\":$u_mtd_num,\"page_size\":$nw,\"block_size\":$ne,\"oob_size\":$no,\"volumes\":$VOLS}"
+					FIRST_UBI_DEV=0
+				done
+				UBI_DEVS="$UBI_DEVS]"
+
+				# MTD partition table
+				MTD_PARTS="["
+				FM=1
+				if [ -f /proc/mtd ]; then
+					while IFS=' ' read -r mdev msz mesz mname; do
+						[ "$mdev" = "dev:" ] && continue
+						mn=${mdev#mtd}; mn=${mn%:}
+						[ -z "$mn" ] && continue
+						mname=$(echo "$mname" | tr -d '"')
+						msz_b=$((0x${msz})) 2>/dev/null || msz_b=0
+						mesz_b=$((0x${mesz})) 2>/dev/null || mesz_b=0
+						mtype="nand"
+						[ -f "/sys/class/mtd/mtd${mn}/type" ] && mtype=$(cat "/sys/class/mtd/mtd${mn}/type" 2>/dev/null)
+						_mecc_c=0; _mecc_f=0
+						if [ -f "/sys/class/mtd/mtd${mn}/ecc_stats" ]; then
+							read _mecc_c _mecc_f _ 2>/dev/null < "/sys/class/mtd/mtd${mn}/ecc_stats"
+							: "${_mecc_c:=0}" "${_mecc_f:=0}"
+						fi
+						[ $FM -eq 0 ] && MTD_PARTS="$MTD_PARTS,"
+						MTD_PARTS="$MTD_PARTS{\"num\":$mn,\"name\":\"$(json_str "$mname")\",\"size\":$msz_b,\"erasesize\":$mesz_b,\"type\":\"$mtype\",\"ecc_corr\":${_mecc_c},\"ecc_fail\":${_mecc_f}}"
+						FM=0
+					done < /proc/mtd
+				fi
+				MTD_PARTS="$MTD_PARTS]"
+				{
+					printf "UBI_MAX_EC=%s\n" "${UBI_MAX_EC:-0}"
+					printf "UBI_BAD_PEB=%s\n" "${UBI_BAD_PEB:-0}"
+					printf "UBI_DEVS='%s'\n" "$UBI_DEVS"
+					printf "MTD_PARTS='%s'\n" "$MTD_PARTS"
+				} > "$STORAGE_INV_CACHE.$$" 2>/dev/null && mv "$STORAGE_INV_CACHE.$$" "$STORAGE_INV_CACHE" 2>/dev/null
+				fi
+
+				# eMMC / SD health
+				EMMC_INFO="null"
+				for mmc in /sys/class/block/mmcblk[0-9]*; do
+					[ -d "$mmc/device" ] || continue
+					case "${mmc##*/}" in *p[0-9]*|*boot*|*rpmb*) continue ;; esac
+					read_file em_name "$mmc/device/name" ""
+					read_file em_manfid "$mmc/device/manfid" ""
+					read_file em_fwrev "$mmc/device/fwrev" ""
+					read_file em_hwrev "$mmc/device/hwrev" ""
+					read_file em_pre_eol "$mmc/device/pre_eol_info" ""
+					read_file em_lt "$mmc/device/life_time" ""
+					read_file em_date "$mmc/device/date" ""
+					read_file em_type "$mmc/device/type" "MMC"
+					lt_a=$(echo "$em_lt" | awk '{print $1}')
+					lt_b=$(echo "$em_lt" | awk '{print $2}')
+					lt_a_i=0; lt_b_i=0; peo_i=0
+					[ -n "$lt_a" ] && lt_a_i=$((lt_a)) 2>/dev/null || lt_a_i=0
+					[ -n "$lt_b" ] && lt_b_i=$((lt_b)) 2>/dev/null || lt_b_i=0
+					[ -n "$em_pre_eol" ] && peo_i=$((em_pre_eol)) 2>/dev/null || peo_i=0
+					em_vendor="Unknown"
+					case "$em_manfid" in
+						0x000001|0x000015) em_vendor="Samsung" ;;
+						0x000002) em_vendor="Kingston" ;;
+						0x000003|0x000045) em_vendor="SanDisk/WD" ;;
+						0x000011) em_vendor="Toshiba" ;;
+						0x000013|0x0000fe) em_vendor="Micron" ;;
+						0x000090) em_vendor="SK Hynix" ;;
+						0x000070) em_vendor="Kingston" ;;
+						0x000031) em_vendor="Silicon Motion" ;;
+						*) em_vendor="$em_manfid" ;;
+					esac
+					EMMC_INFO="{\"dev\":\"${mmc##*/}\",\"name\":\"$(json_str "$em_name")\",\"vendor\":\"$(json_str "$em_vendor")\",\"type\":\"$em_type\",\"fwrev\":\"$em_fwrev\",\"hwrev\":\"$em_hwrev\",\"pre_eol\":$peo_i,\"life_a\":$lt_a_i,\"life_b\":$lt_b_i,\"date\":\"$em_date\"}"
+					break
+				done
+
+				# NVMe sysfs info
+				NVME_INFO="null"
+				for nvme in /sys/class/block/nvme[0-9]*n[0-9]*; do
+					[ -d "$nvme/device" ] || continue
+					case "${nvme##*/}" in *p[0-9]*) continue ;; esac
+					read_file nv_model "$nvme/device/model" ""
+					read_file nv_serial "$nvme/device/serial" ""
+					read_file nv_fw "$nvme/device/firmware_rev" ""
+					read_file nv_transport "$nvme/device/transport" "PCIe"
+					nv_model=$(echo "$nv_model" | sed 's/[[:space:]]*$//')
+					nv_serial=$(echo "$nv_serial" | sed 's/[[:space:]]*$//')
+					nv_fw=$(echo "$nv_fw" | sed 's/[[:space:]]*$//')
+					NVME_INFO="{\"dev\":\"${nvme##*/}\",\"model\":\"$(json_str "$nv_model")\",\"serial\":\"$(json_str "$nv_serial")\",\"fw\":\"$(json_str "$nv_fw")\",\"transport\":\"$nv_transport\"}"
+					break
+				done
+
+				# f2fs filesystem stats
+				F2FS_INFO="["
+				FF=1
+				for f2p in /sys/fs/f2fs/*; do
+					[ -d "$f2p" ] || continue
+					[ -f "$f2p/lifetime_write_kbytes" ] || continue
+					f2dev=${f2p##*/}
+					read_file f2_lw "$f2p/lifetime_write_kbytes" 0
+					read_file f2_util "$f2p/utilization" 0
+					read_file f2_vseg "$f2p/valid_segs" 0
+					read_file f2_dseg "$f2p/dirty_segs" 0
+					read_file f2_fseg "$f2p/free_segs" 0
+					[ $FF -eq 0 ] && F2FS_INFO="$F2FS_INFO,"
+					F2FS_INFO="$F2FS_INFO{\"dev\":\"$f2dev\",\"lifetime_write_kb\":$f2_lw,\"utilization\":$f2_util,\"valid_segs\":$f2_vseg,\"dirty_segs\":$f2_dseg,\"free_segs\":$f2_fseg}"
+					FF=0
+				done
+				F2FS_INFO="$F2FS_INFO]"
+
+				# System info — kernel/arch/distrib, CPU caches, soc0 and vulnerabilities
+				# are hardware-static: store persistently in /etc/hwdash/ so they
+				# survive reboots. Only hostname and overlay usage are recomputed live.
+				# postinst clears /etc/hwdash/ on upgrade so stale data never persists.
+				SYS_STATIC_CACHE="$HWDASH_PERSIST_DIR/sys_static_v2.frag"
+				SYS_STATIC_FRAG=""
+				[ -f "$SYS_STATIC_CACHE" ] && SYS_STATIC_FRAG=$(cat "$SYS_STATIC_CACHE" 2>/dev/null)
+				if [ -z "$SYS_STATIC_FRAG" ]; then
+					SYS_KVER=$(uname -r 2>/dev/null || echo "")
+					SYS_ARCH=$(uname -m 2>/dev/null || echo "")
+					DISTRIB_ID=""; DISTRIB_RELEASE=""; DISTRIB_REVISION=""
+					[ -f /etc/openwrt_release ] && . /etc/openwrt_release
+					L0_SIZE=0; L1D_SIZE=0; L1I_SIZE=0; L2_SIZE=0; L3_SIZE=0; L4_SIZE=0
+					for _idir in /sys/devices/system/cpu/cpu0/cache/index*/; do
+						[ -f "$_idir/level" ] || continue
+						_lvl=$(cat "$_idir/level" 2>/dev/null)
+						_ct=$(cat "$_idir/type" 2>/dev/null)
+						_csz=$(cat "$_idir/size" 2>/dev/null | sed 's/[^0-9]//g')
+						[ -z "$_csz" ] && _csz=0
+						case "$_lvl-$_ct" in
+							0-*) [ $L0_SIZE -eq 0 ] && L0_SIZE=$((_csz*1024)) ;;
+							1-Data) L1D_SIZE=$((_csz*1024)) ;;
+							1-Instruction) L1I_SIZE=$((_csz*1024)) ;;
+							2-*) [ $L2_SIZE -eq 0 ] && L2_SIZE=$((_csz*1024)) ;;
+							3-*) [ $L3_SIZE -eq 0 ] && L3_SIZE=$((_csz*1024)) ;;
+							4-*) [ $L4_SIZE -eq 0 ] && L4_SIZE=$((_csz*1024)) ;;
+						esac
+					done
+					# Fallback for kernels that don't expose cache sysfs (common on embedded SoCs).
+					# L1 sizes are standardised per ARM core type; look up from CPU part number.
+					# L2+ are implementation-defined and left at 0 if sysfs didn't provide them.
+					if [ $L1D_SIZE -eq 0 ] && [ $L1I_SIZE -eq 0 ]; then
+						_cpu_impl=$(awk '/^CPU implementer/{print $NF; exit}' /proc/cpuinfo 2>/dev/null)
+						_cpu_part=$(awk '/^CPU part/{print $NF; exit}' /proc/cpuinfo 2>/dev/null)
+						case "${_cpu_impl}-${_cpu_part}" in
+							0x41-0xd01) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Cortex-A32
+							0x41-0xd03) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Cortex-A53
+							0x41-0xd04) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Cortex-A35
+							0x41-0xd05) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Cortex-A55
+							0x41-0xd06) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A65
+							0x41-0xd07) L1D_SIZE=49152;  L1I_SIZE=49152  ;;  # Cortex-A57
+							0x41-0xd08) L1D_SIZE=49152;  L1I_SIZE=49152  ;;  # Cortex-A72
+							0x41-0xd09) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A73
+							0x41-0xd0a) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A75
+							0x41-0xd0b) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A76
+							0x41-0xd0d) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A77
+							0x41-0xd0e) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A76AE
+							0x41-0xd40) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Neoverse V1
+							0x41-0xd41) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A78
+							0x41-0xd44) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-X1
+							0x41-0xd46) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A510
+							0x41-0xd47) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A710
+							0x41-0xd4d) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-A715
+							0x41-0xd4e) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Cortex-X3
+							0x51-0x801) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Kryo 250 Silver (A53)
+							0x51-0x802) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Kryo 250 Gold (A73)
+							0x51-0x803) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Kryo 250 Silver (A53)
+							0x51-0x804) L1D_SIZE=65536;  L1I_SIZE=65536  ;;  # Kryo 260 Gold (A73)
+							0x51-0x805) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Kryo 260 Silver (A53)
+							0x51-0xc00) L1D_SIZE=32768;  L1I_SIZE=32768  ;;  # Falkor (Qualcomm server)
+						esac
+					fi
+					VULNS="{"
+					_FV=1
+					for _vf in /sys/devices/system/cpu/vulnerabilities/*; do
+						[ -f "$_vf" ] || continue
+						_vname=${_vf##*/}
+						_vstatus=$(head -c 80 "$_vf" 2>/dev/null | tr -d '\n')
+						[ $_FV -eq 0 ] && VULNS="$VULNS,"
+						VULNS="${VULNS}\"$(json_str "$_vname")\":\"$(json_str "$_vstatus")\""
+						_FV=0
+					done
+					VULNS="$VULNS}"
+					SOC0_FAMILY=$(cat /sys/devices/soc0/family 2>/dev/null | tr -d '\n\r')
+					SOC0_MACHINE=$(cat /sys/devices/soc0/machine 2>/dev/null | tr -d '\n\r')
+					SOC0_REVISION=$(cat /sys/devices/soc0/revision 2>/dev/null | tr -d '\n\r')
+					SOC0_SERIAL=$(cat /sys/devices/soc0/serial_number 2>/dev/null | tr -d '\n\r')
+					SOC0_ID=$(cat /sys/devices/soc0/soc_id 2>/dev/null | tr -d '\n\r')
+					SYS_STATIC_FRAG="\"kver\":\"$(json_str "$SYS_KVER")\",\"arch\":\"$(json_str "$SYS_ARCH")\",\"distrib\":\"$(json_str "${DISTRIB_ID:-}")\",\"release\":\"$(json_str "${DISTRIB_RELEASE:-}")\",\"revision\":\"$(json_str "${DISTRIB_REVISION:-}")\",\"l0\":$L0_SIZE,\"l1d\":$L1D_SIZE,\"l1i\":$L1I_SIZE,\"l2\":$L2_SIZE,\"l3\":$L3_SIZE,\"l4\":$L4_SIZE,\"vulns\":$VULNS,\"soc_family\":\"$(json_str "$SOC0_FAMILY")\",\"soc_machine\":\"$(json_str "$SOC0_MACHINE")\",\"soc_revision\":\"$(json_str "$SOC0_REVISION")\",\"soc_serial\":\"$(json_str "$SOC0_SERIAL")\",\"soc_id\":\"$(json_str "$SOC0_ID")\""
+					mkdir -p "$HWDASH_PERSIST_DIR" 2>/dev/null
+					printf '%s' "$SYS_STATIC_FRAG" > "$SYS_STATIC_CACHE.$$" 2>/dev/null && mv "$SYS_STATIC_CACHE.$$" "$SYS_STATIC_CACHE" 2>/dev/null
+				fi
+				SYS_HOSTNAME=$(cat /proc/sys/kernel/hostname 2>/dev/null || echo "")
+				OV_TOTAL=0; OV_USED=0; OV_FREE=0
+				if grep -qs ' /overlay ' /proc/mounts 2>/dev/null; then
+					_ovl=$(df -k /overlay 2>/dev/null | awk 'NR==2{print $2,$3,$4}')
+					OV_TOTAL=$(($(echo "$_ovl" | awk '{print $1}')*1024))
+					OV_USED=$(($(echo "$_ovl" | awk '{print $2}')*1024))
+					OV_FREE=$(($(echo "$_ovl" | awk '{print $3}')*1024))
+				fi
+				SYS_INFO_JSON="{\"hostname\":\"$(json_str "$SYS_HOSTNAME")\",$SYS_STATIC_FRAG,\"overlay_total\":$OV_TOTAL,\"overlay_used\":$OV_USED,\"overlay_free\":$OV_FREE}"
+
+				# NAND chip ID — read from dmesg once, persist to avoid repeated dmesg calls
+				NAND_CHIPID=""
+				if [ "$mtd_count" -gt 0 ]; then
+					_nand_id_cache="$HWDASH_PERSIST_DIR/nand_chipid_v1.txt"
+					if [ -f "$_nand_id_cache" ]; then
+						NAND_CHIPID=$(cat "$_nand_id_cache" 2>/dev/null)
+					else
+						_nd=$(dmesg 2>/dev/null | grep -iE '(qpic|nand|spinand).*(manufacturer|mfr.*id|chip.*id|device.*found)' | grep -ivE '(error|fail|warn)' | tail -1 | sed 's/^\[.*\] //')
+						NAND_CHIPID=${_nd:-Not Available}
+						mkdir -p "$HWDASH_PERSIST_DIR" 2>/dev/null
+						printf '%s' "$NAND_CHIPID" > "$_nand_id_cache.$$" 2>/dev/null && mv "$_nand_id_cache.$$" "$_nand_id_cache" 2>/dev/null
+					fi
+					[ -z "$NAND_CHIPID" ] && NAND_CHIPID="Not Available"
+				fi
+
+				echo "{\"model\":\"$(json_str "$CPU_MODEL")\",\"board\":\"$(json_str "$BOARD_DETECT")\",\"cpus\":$CPUS, \"cpu_meta\":{\"cores\":$PHYSICAL_CORES, \"threads\":$LOGICAL_CPUS, \"max_freq\":$MAX_FREQ_KHZ, \"tasks\":\"$TASKS\", \"load_1\":\"$LOAD_1\", \"load_5\":\"$LOAD_5\", \"load_15\":\"$LOAD_15\", \"governor\":\"$CPU_GOV\", \"conntrack\":$CONN_COUNT, \"conntrack_max\":$CONN_MAX, \"ctxt\":$CTXT, \"intr\":$INTR, \"sys_ticks\":$CPU_TICKS}, \"freqs\":$CPU_FREQS, \"mem\":{\"total\":$MEM_TOTAL, \"free\":$MEM_FREE, \"avail\":$MEM_AVAIL, \"buffers\":$MEM_BUFF, \"cached\":$MEM_CACH, \"swap_total\":$SWAP_TOTAL, \"swap_free\":$SWAP_FREE, \"zram_total\":$ZRAM_TOTAL, \"zram_used\":$ZRAM_USED, \"zram_orig\":$ZRAM_ORIG, \"slab\":$MEM_SLAB, \"pagetables\":$MEM_PAGETABLES}, \"df\":$DF_JSON, \"inodes\":$DF_INODES, \"storage_total_phys\":$total_phys, \"mtd_phys\":$mtd_phys, \"mtd_count\":$mtd_count, \"block_count\":$block_count, \"diskstats\":$DSK_STATS, \"thermals\":$THERMALS, \"uptime\":$UPTIME, \"net\":{\"rx\":$RX_TOTAL, \"tx\":$TX_TOTAL}, \"eth_links\":$ETH_LINKS, \"usb_ports\":$USB_PORTS,\"usb_devs\":$USB_DEVS, \"pcie_devs\":$PCIE_DEVS, \"wifi_radios\":$WIFI_RADIOS, \"ubi_max_ec\":$UBI_MAX_EC, \"ubi_bad_peb\":$UBI_BAD_PEB, \"ubi_devs\":$UBI_DEVS, \"mtd_parts\":$MTD_PARTS, \"emmc_info\":$EMMC_INFO, \"nvme_info\":$NVME_INFO, \"f2fs_info\":$F2FS_INFO, \"block_devs\":$BLOCK_DEVS, \"nand_chip_id\":\"$(json_str "$NAND_CHIPID")\", \"sys_info\":$SYS_INFO_JSON}"
 				;;
 		esac
 		;;
