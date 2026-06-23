@@ -101,57 +101,52 @@ return view.extend({
                 circ: circumference
             };
         };
+        // IEEE 802.11 U-NII sub-band tables, per Wikipedia "List of WLAN channels".
+        // Each row: [name, firstChannel, lastChannel, frequencyRange, requiresDFS]
+        var UNII_5GHZ = [
+            ['U-NII-1',  36,  48,  '5150-5250 MHz', false],
+            ['U-NII-2A', 52,  64,  '5250-5350 MHz', true ],
+            ['U-NII-2C', 100, 144, '5470-5725 MHz', true ],
+            ['U-NII-3',  149, 165, '5725-5850 MHz', false],
+            ['U-NII-4',  169, 177, '5850-5925 MHz', false]
+        ];
+        var UNII_6GHZ = [
+            ['U-NII-5',  1,   93,  '5925-6425 MHz', false],
+            ['U-NII-6',  97,  113, '6425-6525 MHz', false],
+            ['U-NII-7',  117, 185, '6525-6875 MHz', false],
+            ['U-NII-8',  189, 233, '6875-7125 MHz', false]
+        ];
         var groupChannels = function(band, channels) {
             if (!channels || channels.length === 0) return '';
-            var groups = [];
-            var currentGroup = [];
+            var chs = [];
             for (var i = 0; i < channels.length; i++) {
-                var ch = parseInt(channels[i]);
-                if (isNaN(ch)) continue;
-                if (currentGroup.length === 0) {
-                    currentGroup.push(ch);
-                } else {
-                    var prev = currentGroup[currentGroup.length - 1];
-                    var diff = ch - prev;
-                    var breakGroup = false;
-                    
-                    if (band.indexOf('2.4') !== -1 && diff > 1) breakGroup = true;
-                    if (band.indexOf('2.4') === -1 && diff > 4) breakGroup = true;
-                    if (prev <= 48 && ch >= 52) breakGroup = true;
-                    if (prev <= 64 && ch >= 100) breakGroup = true;
-                    if (prev <= 144 && ch >= 149) breakGroup = true;
-                    if (prev <= 165 && ch >= 169) breakGroup = true;
-                    
-                    if (!breakGroup) {
-                        currentGroup.push(ch);
-                    } else {
-                        groups.push(currentGroup);
-                        currentGroup = [ch];
-                    }
-                }
+                var c = parseInt(channels[i]);
+                if (!isNaN(c)) chs.push(c);
             }
-            if (currentGroup.length > 0) groups.push(currentGroup);
-            
-            var strGroups = groups.map(function(g) {
-                if (g.length === 1) return g[0].toString();
-                var start = g[0];
-                var end = g[g.length - 1];
-                var label = '';
-                if (band.indexOf('5') !== -1) {
-                    if (start >= 36 && end <= 48) label = 'UNII-1';
-                    else if (start >= 52 && end <= 64) label = 'UNII-2A';
-                    else if (start >= 100 && end <= 144) label = 'UNII-2C';
-                    else if (start >= 149 && end <= 165) label = 'UNII-3';
-                    else if (start >= 169 && end <= 177) label = 'UNII-4';
-                } else if (band.indexOf('6') !== -1) {
-                    if (start >= 1 && end <= 93) label = 'UNII-5';
-                    else if (start >= 97 && end <= 113) label = 'UNII-6';
-                    else if (start >= 117 && end <= 185) label = 'UNII-7';
-                    else if (start >= 189 && end <= 233) label = 'UNII-8';
-                }
-                return (label ? label + ' (' + start + '-' + end + ')' : start + '-' + end);
+            if (chs.length === 0) return '';
+            chs.sort(function(a, b) { return a - b; });
+            chs = chs.filter(function(c, i) { return i === 0 || c !== chs[i - 1]; });
+            var rng = function(lo, hi) { return lo === hi ? '' + lo : lo + '-' + hi; };
+            // 2.4 GHz is a single contiguous band; show the span and its frequencies.
+            if (band.indexOf('2.4') !== -1) {
+                var f24 = function(c) { return c === 14 ? 2484 : 2412 + (c - 1) * 5; };
+                var lo = chs[0], hi = chs[chs.length - 1];
+                return rng(lo, hi) + ' (' + f24(lo) + '-' + f24(hi) + ' MHz)';
+            }
+            var table = band.indexOf('6') !== -1 ? UNII_6GHZ : UNII_5GHZ;
+            var out = [];
+            table.forEach(function(b) {
+                var inBand = chs.filter(function(c) { return c >= b[1] && c <= b[2]; });
+                if (inBand.length === 0) return;
+                out.push(b[0] + ' ' + rng(inBand[0], inBand[inBand.length - 1]) +
+                    ' (' + b[3] + (b[4] ? ', DFS' : '') + ')');
             });
-            return strGroups.join(', ');
+            // Any channel outside the known sub-bands is listed verbatim.
+            var unknown = chs.filter(function(c) {
+                return !table.some(function(b) { return c >= b[1] && c <= b[2]; });
+            });
+            if (unknown.length > 0) out.push(unknown.join(', '));
+            return out.join(', ');
         };
 
         var calcMaxBitrate = function(hwmode, max_cw, max_spatial) {

@@ -3,13 +3,13 @@ include $(TOPDIR)/rules.mk
 # Core logic (hw_dash.js, luci.hwdash, luci.hwdash_wifi_cap.awk) is synced from
 # the standalone upstream repository:
 #   https://github.com/AliLostInTheDark/luci-app-hw-dashboard
-# Synced at v1.0.0-r2 (commit 921b79b). Packaged here as luci-app-hardware-dashboard.
+# Synced at v1.0.0-r3 (commit 92ba31a). Packaged here as luci-app-hardware-dashboard.
 
 LUCI_TITLE:=Hardware Dashboard
 LUCI_DEPENDS:=+luci-base
 LUCI_PKGARCH:=all
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_LICENSE:=Apache-2.0
 FEED:=luci
 
