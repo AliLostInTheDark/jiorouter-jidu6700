@@ -3,15 +3,16 @@
 json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/[[:cntrl:]]//g'; }
 
 read_file() {
-	local __var=$1
-	local __file=$2
-	local __default=$3
-	if [ -f "$__file" ]; then
-		read -r "$__var" 2>/dev/null < "$__file"
-		[ -z "$(eval echo "\$$__var")" ] && eval "$__var=\"\$__default\""
-	else
-		eval "$__var=\"\$__default\""
-	fi
+	# Reads the first line of $2 into the variable named $1 (default $3).
+	# Uses a local for the value + a literal assignment instead of the old
+	# $(eval echo ...) — that forked a subshell on every call (dozens per
+	# poll) and would execute command substitutions embedded in a hostile
+	# sysfs value (e.g. a crafted USB device model). RHS parameter expansion
+	# is not re-evaluated, so this is both faster and injection-safe.
+	local __var=$1 __file=$2 __default=$3 __val=""
+	[ -f "$__file" ] && read -r __val 2>/dev/null < "$__file"
+	[ -n "$__val" ] || __val=$__default
+	eval "$__var=\$__val"
 }
 
 # Returns 0 if cache file $1 exists and is younger than $2 seconds.
@@ -42,6 +43,15 @@ case "$1" in
 					iw list | awk -f /usr/libexec/rpcd/luci.hwdash_wifi_cap.awk > "$HWDASH_PERSIST_DIR/wifi_cap_v4.json" 2>/dev/null
 				fi
 
+				# Board name, CPU model, core/thread counts and max frequency are
+				# fixed hardware identity — they never change without a reflash. The
+				# detection (devicetree parse, ubus, cpuinfo, topology globs) was
+				# re-run on every poll; resolve it once and persist. postinst clears
+				# /etc/hwdash on upgrade so a new package always re-detects.
+				HW_ID_CACHE="$HWDASH_PERSIST_DIR/hw_identity_v1.sh"
+				BOARD_DETECT=""; CPU_MODEL=""; LOGICAL_CPUS=""; PHYSICAL_CORES=""; MAX_FREQ_KHZ=""
+				[ -f "$HW_ID_CACHE" ] && . "$HW_ID_CACHE" 2>/dev/null
+				if [ -z "$CPU_MODEL" ]; then
 				BOARD_DETECT=$(cat /tmp/sysinfo/model 2>/dev/null)
 				[ -z "$BOARD_DETECT" ] && BOARD_DETECT=$(ubus call system board | jsonfilter -e '@.model' 2>/dev/null)
 
@@ -82,6 +92,20 @@ case "$1" in
 						[ -z "$CPU_MODEL" ] && CPU_MODEL="CPU"
 					fi
 				fi
+				fi
+				LOGICAL_CPUS=$(grep -c '^processor' /proc/cpuinfo)
+				PHYSICAL_CORES=$(cat /sys/devices/system/cpu/cpu*/topology/core_id 2>/dev/null | sort -u | wc -l)
+				[ "${PHYSICAL_CORES:-0}" -eq 0 ] && PHYSICAL_CORES=$LOGICAL_CPUS
+				MAX_FREQ_KHZ=$(cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq 2>/dev/null | sort -nr | head -n 1)
+				[ -z "$MAX_FREQ_KHZ" ] && MAX_FREQ_KHZ=0
+				mkdir -p "$HWDASH_PERSIST_DIR" 2>/dev/null
+				{
+					printf "BOARD_DETECT='%s'\n" "$BOARD_DETECT"
+					printf "CPU_MODEL='%s'\n" "$CPU_MODEL"
+					printf "LOGICAL_CPUS=%s\n" "${LOGICAL_CPUS:-1}"
+					printf "PHYSICAL_CORES=%s\n" "${PHYSICAL_CORES:-1}"
+					printf "MAX_FREQ_KHZ=%s\n" "${MAX_FREQ_KHZ:-0}"
+				} > "$HW_ID_CACHE.$$" 2>/dev/null && mv "$HW_ID_CACHE.$$" "$HW_ID_CACHE" 2>/dev/null
 				fi
 
 
@@ -281,10 +305,11 @@ EOF
 					tmp_meta=${meta#*:}
 					hw_size=${tmp_meta%%:*}
 					hw_model=${tmp_meta#*:}
+					case "$hw_size" in ''|*[!0-9]*) hw_size=$blocks ;; esac
 					[ "$hw_size" -eq 0 ] && hw_size=$blocks
 
 					if [ $FIRST_DF -eq 0 ]; then DF_JSON="$DF_JSON,"; fi
-					DF_JSON="$DF_JSON{\"fs\":\"$fs\",\"mount\":\"$mountpoint\",\"total\":$blocks,\"used\":$used,\"avail\":$avail,\"pct\":\"$pct\",\"dev\":\"$devname\",\"hw_type\":\"$hw_type\",\"hw_size\":$hw_size,\"hw_model\":\"$hw_model\"}"
+					DF_JSON="$DF_JSON{\"fs\":\"$fs\",\"mount\":\"$mountpoint\",\"total\":$blocks,\"used\":$used,\"avail\":$avail,\"pct\":\"$pct\",\"dev\":\"$devname\",\"hw_type\":\"$hw_type\",\"hw_size\":$hw_size,\"hw_model\":\"$(json_str "$hw_model")\"}"
 					FIRST_DF=0
 				done <<EOF
 $(df -k 2>/dev/null | tail -n +2)
@@ -457,13 +482,9 @@ EOF
 				done
 				THERMALS="$THERMALS]"
 
+				# LOGICAL_CPUS / PHYSICAL_CORES / MAX_FREQ_KHZ are resolved once and
+				# cached together with the board identity above (hw_identity_v1.sh).
 
-				LOGICAL_CPUS=$(grep -c '^processor' /proc/cpuinfo)
-				PHYSICAL_CORES=$(cat /sys/devices/system/cpu/cpu*/topology/core_id 2>/dev/null | sort -u | wc -l)
-				[ "$PHYSICAL_CORES" -eq 0 ] && PHYSICAL_CORES=$LOGICAL_CPUS
-				MAX_FREQ_KHZ=$(cat /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq 2>/dev/null | sort -nr | head -n 1)
-				[ -z "$MAX_FREQ_KHZ" ] && MAX_FREQ_KHZ=0
-				
 				read -r LOAD_1 LOAD_5 LOAD_15 TASKS _ < /proc/loadavg
 				[ -z "$TASKS" ] && TASKS="0/0"
 
@@ -788,7 +809,7 @@ EOF
 						[ -z "$cc" ] && cc="00"
 
 						if [ $FIRST_WIFI -eq 0 ]; then WIFI_RADIOS="$WIFI_RADIOS,"; fi
-						WIFI_RADIOS="$WIFI_RADIOS{\"iface\":\"$iface\",\"phy\":\"$phyname\",\"band\":\"$band\",\"txpower\":\"$txpower\",\"hwmode\":\"$hwmode\",\"hardware\":\"$hardware\",\"channel\":\"$channel\",\"curr_width\":\"$curr_width\",\"cfg_nss\":\"$cfg_nss\",\"hw_nss\":$hw_nss,\"channels\":\"$enabled_ch\",\"bitrate\":\"$bitrate\",\"country\":\"$cc\",\"dfs_region\":\"$REG_DFS\",\"phycap\":$phycap}"
+						WIFI_RADIOS="$WIFI_RADIOS{\"iface\":\"$iface\",\"phy\":\"$phyname\",\"band\":\"$band\",\"txpower\":\"$txpower\",\"hwmode\":\"$hwmode\",\"hardware\":\"$(json_str "$hardware")\",\"channel\":\"$channel\",\"curr_width\":\"$curr_width\",\"cfg_nss\":\"$cfg_nss\",\"hw_nss\":$hw_nss,\"channels\":\"$enabled_ch\",\"bitrate\":\"$bitrate\",\"country\":\"$cc\",\"dfs_region\":\"$REG_DFS\",\"phycap\":$phycap}"
 						FIRST_WIFI=0
 					done
 				fi
@@ -1069,10 +1090,12 @@ EOF
 				SYS_HOSTNAME=$(cat /proc/sys/kernel/hostname 2>/dev/null || echo "")
 				OV_TOTAL=0; OV_USED=0; OV_FREE=0
 				if grep -qs ' /overlay ' /proc/mounts 2>/dev/null; then
-					_ovl=$(df -k /overlay 2>/dev/null | awk 'NR==2{print $2,$3,$4}')
-					OV_TOTAL=$(($(echo "$_ovl" | awk '{print $1}')*1024))
-					OV_USED=$(($(echo "$_ovl" | awk '{print $2}')*1024))
-					OV_FREE=$(($(echo "$_ovl" | awk '{print $3}')*1024))
+					# Force numeric in awk (×1024) so an empty/odd df result can never
+					# produce an empty $(( )) and break the JSON; one fork, not four.
+					read OV_TOTAL OV_USED OV_FREE <<EOF
+$(df -k /overlay 2>/dev/null | awk 'NR==2{print ($2+0)*1024, ($3+0)*1024, ($4+0)*1024}')
+EOF
+					: "${OV_TOTAL:=0}" "${OV_USED:=0}" "${OV_FREE:=0}"
 				fi
 				SYS_INFO_JSON="{\"hostname\":\"$(json_str "$SYS_HOSTNAME")\",$SYS_STATIC_FRAG,\"overlay_total\":$OV_TOTAL,\"overlay_used\":$OV_USED,\"overlay_free\":$OV_FREE}"
 
