@@ -1532,9 +1532,12 @@ return view.extend({
                             var regStr = '';
                             if (w.country && w.country !== '00' && w.country !== '') regStr = w.country + (w.dfs_region ? ' · ' + w.dfs_region : '');
                             else if (w.country === '00') regStr = '00 · World';
-                            // Channel survey — live airtime load (busy %) + noise floor,
-                            // computed from the between-poll delta of the cumulative
-                            // survey counters so it tracks current congestion.
+                            // Channel survey — airtime load (busy %) + noise floor.
+                            // Prefer the between-poll delta so it tracks CURRENT
+                            // congestion (ath11k advances the counters every read). Some
+                            // mt76 builds only refresh the survey snapshot lazily, so the
+                            // counters don't move between polls — there, fall back to the
+                            // cumulative busy/active ratio so airtime is still shown.
                             var sv = (res.wifi_survey && res.wifi_survey[w.iface]) || null;
                             var busyPct = -1, surveyStr = '', noiseVal = 0;
                             if (sv) {
@@ -1543,12 +1546,18 @@ return view.extend({
                                 var psv = self.prevSurvey[w.iface];
                                 var curAct = parseInt(sv.active) || 0, curBusy = parseInt(sv.busy) || 0;
                                 var curTx = parseInt(sv.tx) || 0, curRx = parseInt(sv.rx) || 0;
-                                if (psv && curAct > psv.active) {
-                                    var dAct = curAct - psv.active;
-                                    busyPct = Math.max(0, Math.min(100, Math.round((curBusy - psv.busy) / dAct * 100)));
-                                    var txPct = Math.max(0, Math.min(100, Math.round((curTx - psv.tx) / dAct * 100)));
-                                    var rxPct = Math.max(0, Math.min(100, Math.round((curRx - psv.rx) / dAct * 100)));
-                                    surveyStr = busyPct + '% busy (' + txPct + '% tx / ' + rxPct + '% rx)';
+                                if (curAct > 0) {
+                                    var live = psv && curAct > psv.active;          // counters advanced
+                                    var stale = psv && curAct === psv.active;        // snapshot didn't move
+                                    var dA, dB, dT, dR;
+                                    if (live)       { dA = curAct - psv.active; dB = curBusy - psv.busy; dT = curTx - psv.tx; dR = curRx - psv.rx; }
+                                    else if (stale) { dA = curAct; dB = curBusy; dT = curTx; dR = curRx; } // cumulative fallback
+                                    if (dA > 0) {
+                                        busyPct = Math.max(0, Math.min(100, Math.round(dB / dA * 100)));
+                                        var txPct = Math.max(0, Math.min(100, Math.round(dT / dA * 100)));
+                                        var rxPct = Math.max(0, Math.min(100, Math.round(dR / dA * 100)));
+                                        surveyStr = busyPct + '% busy (' + txPct + '% tx / ' + rxPct + '% rx)';
+                                    }
                                 }
                                 self.prevSurvey[w.iface] = { active: curAct, busy: curBusy, tx: curTx, rx: curRx };
                             }
