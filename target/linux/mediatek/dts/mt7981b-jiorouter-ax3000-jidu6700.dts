@@ -85,7 +85,7 @@
 		reg = <0>;
 		phy-mode = "2500base-x";
 
-		nvmem-cells = <&mfg_mac 0>;
+		nvmem-cells = <&mfg_mac 1>;
 		nvmem-cell-names = "mac-address";
 
 		fixed-link {
@@ -113,7 +113,7 @@
 			port@0 {
 				reg = <0>;
 				label = "wan";
-				nvmem-cells = <&mfg_mac 1>;
+				nvmem-cells = <&mfg_mac 0>;
 				nvmem-cell-names = "mac-address";
 			};
 
