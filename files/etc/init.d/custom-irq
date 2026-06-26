@@ -1,0 +1,58 @@
+#!/bin/sh /etc/rc.common
+# Copyright (C) 2024
+# Custom IRQ balancer for dual-core MT7981b (JioRouter JIDU6700)
+
+START=99
+
+set_irq_affinity() {
+    local irq_name=$1
+    local affinity=$2
+    local irqs=$(awk -v name="$irq_name" '$0 ~ name {print $1}' /proc/interrupts | sed 's/://')
+    
+    for irq in $irqs; do
+        if [ -f "/proc/irq/$irq/smp_affinity" ]; then
+            echo "$affinity" > /proc/irq/$irq/smp_affinity
+        fi
+    done
+}
+
+start() {
+    echo "Balancing IRQs across CPU0 and CPU1..."
+
+    # Ethernet usually has multiple interrupts (RX/TX). Distribute them.
+    eth_irqs=$(awk '/15100000.ethernet/ {print $1}' /proc/interrupts | sed 's/://')
+    core=1
+    for irq in $eth_irqs; do
+        if [ -f "/proc/irq/$irq/smp_affinity" ]; then
+            echo "$core" > /proc/irq/$irq/smp_affinity
+        fi
+        if [ "$core" = "1" ]; then
+            core=2
+        else
+            core=1
+        fi
+    done
+
+    # Crypto (EIP97) has multiple interrupts, distribute them too
+    crypto_irqs=$(awk '/10320000.crypto/ {print $1}' /proc/interrupts | sed 's/://')
+    core=2
+    for irq in $crypto_irqs; do
+        if [ -f "/proc/irq/$irq/smp_affinity" ]; then
+            echo "$core" > /proc/irq/$irq/smp_affinity
+        fi
+        if [ "$core" = "2" ]; then
+            core=1
+        else
+            core=2
+        fi
+    done
+
+    # Wi-Fi (mt7915e) to CPU1
+    set_irq_affinity "mt7915e" "2"
+
+    # USB (xhci-hcd) to CPU1
+    set_irq_affinity "xhci-hcd" "2"
+
+    # SPI to CPU0 (keep it on 1)
+    set_irq_affinity "spi" "1"
+}
