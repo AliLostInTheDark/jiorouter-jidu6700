@@ -33,8 +33,15 @@ HOST_CONFIGURE_ARGS += \
 	--with-pic \
 	--disable-tests
 
+define Host/Install
+	$(call Host/Compile/Default,install)
+	$(INSTALL_DATA) $(HOST_BUILD_DIR)/crypto/.libs/libcompat.a $(STAGING_DIR_HOST)/lib/
+	sed -i "s|^dependency_libs='|dependency_libs='-lcompat |" $(STAGING_DIR_HOST)/lib/libcrypto.la
+endef
+
 define Host/Uninstall
 	-$(call Host/Compile/Default,uninstall)
+	rm -f $(STAGING_DIR_HOST)/lib/libcompat.a
 endef
 
 $(eval $(call HostBuild))
