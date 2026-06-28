@@ -73,6 +73,15 @@
 		regulator-boot-on;
 		regulator-always-on;
 	};
+
+	reg_vbus: regulator-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
 };
 
 &eth {
@@ -267,11 +276,17 @@
 	};
 };
 
-&uart0 {
+&xhci {
 	status = "okay";
+	vusb33-supply = <&reg_3p3v>;
+	vbus-supply = <&reg_vbus>;
 };
 
 &usb_phy {
+	status = "okay";
+};
+
+&uart0 {
 	status = "okay";
 };
 
@@ -283,9 +298,4 @@
 	status = "okay";
 	nvmem-cells = <&eeprom_factory_0>, <&mfg_mac 2>;
 	nvmem-cell-names = "eeprom", "mac-address";
-};
-
-&xhci {
-	status = "okay";
-	vusb33-supply = <&reg_3p3v>;
 };
