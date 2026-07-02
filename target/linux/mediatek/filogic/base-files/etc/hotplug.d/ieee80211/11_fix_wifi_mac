@@ -165,6 +165,12 @@ case "$board" in
 	jdcloud,re-cp-03)
 		[ "$PHYNBR" = "1" ] && mmc_get_mac_binary factory 0xa > /sys${DEVPATH}/macaddress
 		;;
+	jiorouter,ax3000-jidu6700)
+		# phy0 (2.4G) gets A7 from the mfg_mac nvmem cell on &wifi in the
+		# dts; phy1 (5G) continues the sequence to A8 (base MFG cell 0 + 3).
+		addr=$(mtd_get_mac_binary "MFG" 0x0)
+		[ "$PHYNBR" = "1" ] && macaddr_add "$addr" 3 > /sys${DEVPATH}/macaddress
+		;;
 	jiorouter,ax6000-jidu6101)
 		addr=$(mtd_get_mac_ascii u-boot-env mac)
 		[ "$PHYNBR" = "0" ] && macaddr_add $addr 2 > /sys${DEVPATH}/macaddress
