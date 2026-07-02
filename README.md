@@ -21,7 +21,7 @@ Connect your USB to TTL adapter to the UART headers soldered onto your board.
 * **RX** to **TX**
 * **GND** to **GND**
 
-![UART Connection](./UART.jpeg)
+<img width="2252" height="1642" alt="UART" src="https://github.com/user-attachments/assets/4954d1e0-f3de-46d7-aa17-4c7bccf8faa5" />
 
 ### Step 2: Establish Serial Console
 Use a serial terminal emulator like **PuTTY**, **Tera Term 5**, or **MobaXterm** to gain access to the terminal.
