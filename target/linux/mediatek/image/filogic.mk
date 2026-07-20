@@ -1837,7 +1837,7 @@ define Device/globitel_bt-r320
   KERNEL := kernel-bin | lzma
   KERNEL_INITRAMFS := kernel-bin | lzma | \
 	fit lzma $$(KDIR)/image-$$(firstword $$(DEVICE_DTS)).dtb with-initrd | pad-to 64k
-  KERNEL_INITRAMFS_SUFFIX := -initramfs-recovery.itb
+  KERNEL_INITRAMFS_SUFFIX := -recovery.itb
   IMAGES := sysupgrade.itb
   IMAGE_SIZE := $$(shell expr 64 + $$(CONFIG_TARGET_ROOTFS_PARTSIZE))m
   IMAGE/sysupgrade.itb := append-kernel | \
@@ -1874,6 +1874,20 @@ define Device/h3c_magic-nx30-pro
   ARTIFACT/bl31-uboot.fip := mt7981-bl31-uboot h3c_magic-nx30-pro
 endef
 TARGET_DEVICES += h3c_magic-nx30-pro
+
+define Device/hiveton_h5000m
+  DEVICE_VENDOR := Hiveton
+  DEVICE_MODEL := H5000M
+  DEVICE_ALT0_VENDOR := Airpi
+  DEVICE_ALT0_MODEL := H5000M
+  DEVICE_DTS := mt7987a-hiveton-h5000m
+  DEVICE_DTS_DIR := ../dts
+  DEVICE_PACKAGES := kmod-hwmon-pwmfan kmod-usb3 mt7987-2p5g-phy-firmware \
+	kmod-mt7996e kmod-mt7992-23-firmware f2fsck mkf2fs
+  KERNEL_LOADADDR := 0x40000000
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += hiveton_h5000m
 
 define Device/huasifei_wh3000
   DEVICE_VENDOR := Huasifei
