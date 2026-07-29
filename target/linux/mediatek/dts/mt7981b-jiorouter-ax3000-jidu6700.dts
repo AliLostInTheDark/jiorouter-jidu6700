@@ -16,7 +16,7 @@
 	aliases {
 		led-boot = &led_red;
 		led-failsafe = &led_red;
-		led-running = &led_red;
+		led-running = &led_green;
 		led-upgrade = &led_blue;
 		serial0 = &uart0;
 	};
@@ -44,20 +44,20 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led_red: led-0 {
+		led_red: led-red {
 			color = <LED_COLOR_ID_RED>;
 			function = LED_FUNCTION_STATUS;
 			gpios = <&pio 4 GPIO_ACTIVE_LOW>;
 			default-state = "on";
 		};
 
-		led_green: led-1 {
+		led_green: led-green {
 			color = <LED_COLOR_ID_GREEN>;
 			function = LED_FUNCTION_STATUS;
 			gpios = <&pio 5 GPIO_ACTIVE_LOW>;
 		};
 
-		led_blue: led-2 {
+		led_blue: led-blue {
 			color = <LED_COLOR_ID_BLUE>;
 			function = LED_FUNCTION_STATUS;
 			gpios = <&pio 6 GPIO_ACTIVE_LOW>;
