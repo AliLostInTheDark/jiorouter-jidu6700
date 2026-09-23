@@ -294,7 +294,19 @@
 };
 
 &wifi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	nvmem-cells = <&eeprom_factory_0>;
+	nvmem-cell-names = "eeprom";
 	status = "okay";
-	nvmem-cells = <&eeprom_factory_0>, <&mfg_mac 2>;
-	nvmem-cell-names = "eeprom", "mac-address";
+	band@0 {
+		reg = <0>;
+		nvmem-cells = <&mfg_mac 2>;
+		nvmem-cell-names = "mac-address";
+	};
+	band@1 {
+		reg = <1>;
+		nvmem-cells = <&mfg_mac 3>;
+		nvmem-cell-names = "mac-address";
+	};
 };
